@@ -6,32 +6,40 @@
 #include <stdbool.h>
 #include <math.h>
 #include <sys/time.h>
+#include <numa.h>
 
 static double start_time[8];
 
-static double get_time() {
-    struct timeval tv;
-    gettimeofday(&tv, 0);
-    return tv.tv_sec + tv.tv_usec * 1e-6;
+static double get_time()
+{
+  struct timeval tv;
+  gettimeofday(&tv, 0);
+  return tv.tv_sec + tv.tv_usec * 1e-6;
 }
 
-void timer_start(int i) {
-    start_time[i] = get_time();
+void timer_start(int i)
+{
+  start_time[i] = get_time();
 }
 
-double timer_stop(int i) {
-    return get_time() - start_time[i];
+double timer_stop(int i)
+{
+  return get_time() - start_time[i];
 }
 
-void check_mat_mul(float *A, float *B, float *C, int M, int N, int K) {
+void check_mat_mul(float *A, float *B, float *C, int M, int N, int K)
+{
   printf("Validating...\n");
 
   float *C_ans;
   alloc_mat(&C_ans, M, N);
   zero_mat(C_ans, M, N);
-  for (int i = 0; i < M; ++i) {
-    for (int k = 0; k < K; ++k) {
-      for (int j = 0; j < N; ++j) {
+  for (int i = 0; i < M; ++i)
+  {
+    for (int k = 0; k < K; ++k)
+    {
+      for (int j = 0; j < N; ++j)
+      {
         C_ans[i * N + j] += A[i * K + k] * B[k * N + j];
       }
     }
@@ -40,11 +48,14 @@ void check_mat_mul(float *A, float *B, float *C, int M, int N, int K) {
   bool is_valid = true;
   int cnt = 0, thr = 10;
   float eps = 1e-3;
-  for (int i = 0; i < M; ++i) {
-    for (int j = 0; j < N; ++j) {
+  for (int i = 0; i < M; ++i)
+  {
+    for (int j = 0; j < N; ++j)
+    {
       float c = C[i * N + j];
       float c_ans = C_ans[i * N + j];
-      if (fabsf(c - c_ans) > eps && (c_ans == 0 || fabsf((c - c_ans) / c_ans) > eps)) {
+      if (fabsf(c - c_ans) > eps && (c_ans == 0 || fabsf((c - c_ans) / c_ans) > eps))
+      {
         ++cnt;
         if (cnt <= thr)
           printf("C[%d][%d] : correct_value = %f, your_value = %f\n", i, j, c_ans, c);
@@ -55,38 +66,57 @@ void check_mat_mul(float *A, float *B, float *C, int M, int N, int K) {
     }
   }
 
-  if (is_valid) {
+  if (is_valid)
+  {
     printf("Result: VALID\n");
-  } else {
+  }
+  else
+  {
     printf("Result: INVALID\n");
   }
 }
 
-void print_mat(float *m, int R, int C) {
-  for (int i = 0; i < R; ++i) { 
-    for (int j = 0; j < C; ++j) {
+void print_mat(float *m, int R, int C)
+{
+  for (int i = 0; i < R; ++i)
+  {
+    for (int j = 0; j < C; ++j)
+    {
       printf("%+.3f ", m[i * C + j]);
     }
     printf("\n");
   }
 }
 
-void alloc_mat(float **m, int R, int C) {
-  *m = (float *) aligned_alloc(32, sizeof(float) * R * C);
-  if (*m == NULL) {
+void alloc_mat(float **m, int R, int C)
+{
+  // *m = (float *) aligned_alloc(32, sizeof(float) * R * C);
+  *m = (float *)numa_alloc_interleaved(sizeof(float) * R * C);
+  if (*m == NULL)
+  {
     printf("Failed to allocate memory for matrix.\n");
     exit(0);
   }
 }
 
-void rand_mat(float *m, int R, int C) {
-  for (int i = 0; i < R; i++) { 
-    for (int j = 0; j < C; j++) {
-      m[i * C + j] = (float) rand() / RAND_MAX - 0.5;
+void rand_mat(float *m, int R, int C)
+{
+  int j;
+  // #pragma omp parallel for num_threads(16) proc_bind(spread) shared(m, R) private(j)
+  for (int i = 0; i < R; i++)
+  {
+    for (j = 0; j < C; j++)
+    {
+      m[i * C + j] = (float)rand() / RAND_MAX - 0.5;
     }
   }
 }
 
-void zero_mat(float *m, int R, int C) {
+void zero_mat(float *m, int R, int C)
+{
   memset(m, 0, sizeof(float) * R * C);
+  // #pragma omp parallel for num_threads(16) proc_bind(spread) shared(m, R)
+
+  // for (int i = 0; i < R*C; i++)
+  //   m[i] = 0;
 }

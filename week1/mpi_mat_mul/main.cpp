@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-
+#include <numa.h>
 #include "mat_mul.h"
 #include "util.h"
 
@@ -14,8 +14,10 @@ static int num_threads = 1;
 static int num_iterations = 1;
 static int mpi_rank, mpi_world_size;
 
-static void print_help(const char *prog_name) {
-  if (mpi_rank == 0) {
+static void print_help(const char *prog_name)
+{
+  if (mpi_rank == 0)
+  {
     printf("Usage: %s [-pvh] [-t num_threads] [-n num_iterations] M N K\n",
            prog_name);
     printf("Options:\n");
@@ -31,10 +33,13 @@ static void print_help(const char *prog_name) {
   }
 }
 
-static void parse_opt(int argc, char **argv) {
+static void parse_opt(int argc, char **argv)
+{
   int c;
-  while ((c = getopt(argc, argv, "pvht:n:")) != -1) {
-    switch (c) {
+  while ((c = getopt(argc, argv, "pvht:n:")) != -1)
+  {
+    switch (c)
+    {
     case 'p':
       print_matrix = true;
       break;
@@ -54,8 +59,10 @@ static void parse_opt(int argc, char **argv) {
       exit(0);
     }
   }
-  for (int i = optind, j = 0; i < argc; ++i, ++j) {
-    switch (j) {
+  for (int i = optind, j = 0; i < argc; ++i, ++j)
+  {
+    switch (j)
+    {
     case 0:
       M = atoi(argv[i]);
       break;
@@ -69,7 +76,8 @@ static void parse_opt(int argc, char **argv) {
       break;
     }
   }
-  if (mpi_rank == 0) {
+  if (mpi_rank == 0)
+  {
     printf("Options:\n");
     printf("  Problem size: M = %d, N = %d, K = %d\n", M, N, K);
     printf("  Number of threads: %d\n", num_threads);
@@ -80,9 +88,11 @@ static void parse_opt(int argc, char **argv) {
   }
 }
 
-int main(int argc, char **argv) {
-  MPI_Init(&argc, &argv);
-
+int main(int argc, char **argv)
+{
+  // MPI_Init(&argc, &argv);
+  int i;
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &i);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size);
 
@@ -96,7 +106,8 @@ int main(int argc, char **argv) {
   parse_opt(argc, argv);
 
   float *A, *B, *C;
-  if (mpi_rank == 0) {
+  if (mpi_rank == 0)
+  {
     printf("[rank %d] Initializing matrix...\n", mpi_rank);
     alloc_mat(&A, M, K);
     alloc_mat(&B, K, N);
@@ -105,11 +116,25 @@ int main(int argc, char **argv) {
     rand_mat(B, K, N);
     printf("[rank %d] Initializing matrix done!\n", mpi_rank);
   }
+  else
+  {
+    A = (float *)numa_alloc_interleaved(M * K / mpi_world_size * sizeof(float));
+    B = (float *)numa_alloc_interleaved(K * N * sizeof(float));
+    C = (float *)numa_alloc_interleaved(M * N / mpi_world_size * sizeof(float));
+    zero_mat(C, M/mpi_world_size, N);
+  }
+
   MPI_Barrier(MPI_COMM_WORLD);
+  // if (mpi_rank == 0)
+  // {
+  //   B_bcast = B;
+  // }
 
   double elapsed_time_sum = 0;
-  for (int i = 0; i < num_iterations; ++i) {
-    if (mpi_rank == 0) {
+  for (int i = 0; i < num_iterations; ++i)
+  {
+    if (mpi_rank == 0)
+    {
       printf("[rank %d] Calculating...(iter=%d) ", mpi_rank, i);
       fflush(stdout);
       zero_mat(C, M, N);
@@ -117,18 +142,22 @@ int main(int argc, char **argv) {
 
     MPI_Barrier(MPI_COMM_WORLD);
     timer_start(0);
+    // zero_mat(C_scatter, M / mpi_world_size, N);
     mat_mul(A, B, C, M, N, K, num_threads, mpi_rank, mpi_world_size);
     MPI_Barrier(MPI_COMM_WORLD);
     double elapsed_time = timer_stop(0);
 
-    if (mpi_rank == 0) {
+    if (mpi_rank == 0 && i > 0)
+    {
       printf("%f sec\n", elapsed_time);
       elapsed_time_sum += elapsed_time;
     }
   }
 
-  if (mpi_rank == 0) {
-    if (print_matrix) {
+  if (mpi_rank == 0)
+  {
+    if (print_matrix)
+    {
       printf("MATRIX A:\n");
       print_mat(A, M, K);
       printf("MATRIX B:\n");
@@ -137,11 +166,12 @@ int main(int argc, char **argv) {
       print_mat(C, M, N);
     }
 
-    if (validation) {
+    if (validation)
+    {
       check_mat_mul(A, B, C, M, N, K);
     }
 
-    double elapsed_time_avg = elapsed_time_sum / num_iterations;
+    double elapsed_time_avg = elapsed_time_sum / (num_iterations - 1);
     printf("[rank %d] Avg. time: %f sec\n", mpi_rank, elapsed_time_avg);
     printf("[rank %d] Avg. throughput: %f GFLOPS\n", mpi_rank,
            2.0 * M * N * K / elapsed_time_avg / 1e9);
