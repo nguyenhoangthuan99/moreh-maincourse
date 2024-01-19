@@ -1,9 +1,9 @@
 TARGET=main
 OBJECTS=util.o mat_mul.o
 
-CPPFLAGS=-std=c++11 -Wall -Ofast -march=znver2  -fopenmp -ffast-math
+CPPFLAGS=-std=c++11 -O3 -Wall -march=znver2 -mavx2 -mfma -fopenmp -funroll-loops -mfpmath=sse
 # -march=znver2 -fcf-protection=none -fno-stack-protector 
-# LDFLAGS=-lm -pthread
+LDFLAGS=-lm -pthread
 LDLIBS=-lnuma -lm -lmpi -lmpi_cxx
 
 all: $(TARGET)

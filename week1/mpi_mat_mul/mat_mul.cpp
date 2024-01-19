@@ -9,16 +9,18 @@
 #include <omp.h>
 #include <mpi-ext.h>
 #include <numa.h>
+#include <iostream>
 #include "util.h"
+
 
 // static float *A, *B, *C;
 // static int M, N, K;
 static int num_threads;
 static int mpi_rank, mpi_world_size;
 
-#define ITILESIZE (128)
+#define ITILESIZE (64)
 #define JTILESIZE (512)
-#define KTILESIZE (512)
+#define KTILESIZE (480)
 
 typedef struct
 {
@@ -37,17 +39,17 @@ void *mat_mul_thread(void *params)
   int M = threadParams->_M, N = threadParams->_N, K = threadParams->_K;
   int kk, ii, jj;
   // if (threadParams->_mpi_rank>0)
-    zero_mat(C, M, N);
+  zero_mat(C, M, N);
   for (kk = 0; kk < K; kk += KTILESIZE)
     for (ii = 0; ii < M; ii += ITILESIZE)
       for (jj = 0; jj < N; jj += JTILESIZE)
       {
         int k, i, j;
-        int boundk = std::min(kk + KTILESIZE, K);
-        int boundi = std::min(ii + ITILESIZE, M);
-        int boundj = std::min(jj + JTILESIZE, N);
-        for (k = kk; k < boundk - 5; k += 6)
-          for (i = ii; i < boundi; i++)
+        int limk = std::min(kk + KTILESIZE, K);
+        int limi = std::min(ii + ITILESIZE, M);
+        int limj = std::min(jj + JTILESIZE, N);
+        for (k = kk; k < limk - 5; k += 6)
+          for (i = ii; i < limi; i++)
           {
             __m256 a0 = _mm256_set1_ps(A[i * K + k + 0]);
             __m256 a1 = _mm256_set1_ps(A[i * K + k + 1]);
@@ -55,7 +57,7 @@ void *mat_mul_thread(void *params)
             __m256 a3 = _mm256_set1_ps(A[i * K + k + 3]);
             __m256 a4 = _mm256_set1_ps(A[i * K + k + 4]);
             __m256 a5 = _mm256_set1_ps(A[i * K + k + 5]);
-            for (j = jj; j < boundj - 7; j += 8)
+            for (j = jj; j < limj - 7; j += 8)
             {
               __m256 b0 = _mm256_loadu_ps(B + (k + 0) * N + j);
               __m256 b1 = _mm256_loadu_ps(B + (k + 1) * N + j);
@@ -71,16 +73,17 @@ void *mat_mul_thread(void *params)
               c = _mm256_fmadd_ps(a4, b4, c);
               c = _mm256_fmadd_ps(a5, b5, c);
               // _mm256_storeu_ps(C + i * N + j, c);
-              C[i * N + j+7] = c[7];
-              C[i * N + j+6] = c[6];
-              C[i * N + j+0] = c[0];
-              C[i * N + j+1] = c[1];
-              C[i * N + j+2] = c[2];
-              C[i * N + j+3] = c[3];
-              C[i * N + j+4] = c[4];
-              C[i * N + j+5] = c[5];
+              C[i * N + j + 7] = c[7];
+              C[i * N + j + 6] = c[6];
+              C[i * N + j + 0] = c[0];
+              C[i * N + j + 1] = c[1];
+              C[i * N + j + 2] = c[2];
+              C[i * N + j + 3] = c[3];
+              C[i * N + j + 4] = c[4];
+              C[i * N + j + 5] = c[5];
             }
-            for (; j < boundj; j++)
+            
+            for (; j < limj; j++)
             {
               C[i * N + j] += A[i * K + (k + 0)] * B[(k + 0) * N + j];
               C[i * N + j] += A[i * K + (k + 1)] * B[(k + 1) * N + j];
@@ -90,9 +93,10 @@ void *mat_mul_thread(void *params)
               C[i * N + j] += A[i * K + (k + 5)] * B[(k + 5) * N + j];
             }
           }
-        for (; k < boundk; k++)
-          for (i = ii; i < boundi; i++)
-            for (j = jj; j < boundj; j++)
+        for (; k < limk; k++)
+          for (i = ii; i < limi; i++)
+          // #pragma omp simd
+            for (j = jj; j < limj; j++)
               C[i * N + j] += A[i * K + k] * B[k * N + j];
       }
   pthread_exit(NULL);
@@ -188,7 +192,7 @@ static void mat_mul_pthread(float *_A, float *_B, float *_C, int _M, int _N, int
 
 void mat_mul(float *_A, float *_B, float *_C, int _M, int _N, int _K,
              int _num_threads, int _mpi_rank, int _mpi_world_size)
-            //  float *A_scatter, float *B_bcast, float *C_scatter)
+//  float *A_scatter, float *B_bcast, float *C_scatter)
 {
   float *A = _A;
   float *B = _B;
@@ -196,27 +200,36 @@ void mat_mul(float *_A, float *_B, float *_C, int _M, int _N, int _K,
   int M = _M, N = _N, K = _K;
   num_threads = _num_threads, mpi_rank = _mpi_rank,
   mpi_world_size = _mpi_world_size;
-  MPI_Request *request = (MPI_Request *)malloc(2 * sizeof(MPI_Request));
+  MPI_Request request[2];// = (MPI_Request *)malloc(2 * sizeof(MPI_Request));
+  int sendcounts[mpi_world_size] ;//= (int *)malloc(mpi_world_size * sizeof(int));
+  int displ[mpi_world_size];// = (int *)malloc(mpi_world_size * sizeof(int));
+  for (int i = 0; i < mpi_world_size; i++)
+  {
+    int is = M / mpi_world_size * i + std::min(i, M % mpi_world_size);
+    int ie = M / mpi_world_size * (i+1) + std::min(i+1, M % mpi_world_size);
+    sendcounts[i] = (ie-is)* K ;
+    displ[i] = is * K ;
+    // std::cout<<"\n"<<sendcounts[i]<<" "<<displ[i]<<std::endl;
+  }
 
   MPI_Ibcast(B, K * N, MPI_FLOAT, 0, MPI_COMM_WORLD, request);
 
-  MPI_Iscatter(A, M * K / mpi_world_size, MPI_FLOAT, A, M * K / mpi_world_size, MPI_FLOAT, 0, MPI_COMM_WORLD, request + 1);
-
+  MPI_Iscatterv(A, sendcounts,displ, MPI_FLOAT, A, M * K / mpi_world_size, MPI_FLOAT, 0, MPI_COMM_WORLD, request + 1);
+  M = sendcounts[_mpi_rank]/K;
   MPI_Request request_result;
   // MPI_Status status_result;
   // MPI_Waitall(2,request,MPI_STATUSES_IGNORE);
   // double start = MPI_Wtime();
-  mat_mul_pthread(A, B, C, M / mpi_world_size, N, K, num_threads, _mpi_rank);
+  mat_mul_pthread(A, B, C, M , N, K, num_threads, _mpi_rank);
   // double end = MPI_Wtime();
 
   // printf("\nexecution time %lf\n", end - start);
   // double start = MPI_Wtime();
 
-  MPI_Igather(C, M * N / mpi_world_size, MPI_FLOAT, C, M * N / mpi_world_size, MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
-  MPI_Wait(&request_result, MPI_STATUS_IGNORE);
+  MPI_Igatherv(C, M * N , MPI_FLOAT, C, sendcounts,displ , MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
+  // MPI_Wait(&request_result, MPI_STATUS_IGNORE);
   // double end = MPI_Wtime();
   // printf("gather time %lf\n", end - start);
-
-
+  // free(request);
+  // free(sendcounts);
 }
-

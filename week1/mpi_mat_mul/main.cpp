@@ -118,9 +118,9 @@ int main(int argc, char **argv)
   }
   else
   {
-    A = (float *)numa_alloc_interleaved(M * K / mpi_world_size * sizeof(float));
+    A = (float *)numa_alloc_interleaved(M  / mpi_world_size *K * sizeof(float));
     B = (float *)numa_alloc_interleaved(K * N * sizeof(float));
-    C = (float *)numa_alloc_interleaved(M * N / mpi_world_size * sizeof(float));
+    C = (float *)numa_alloc_interleaved(M / mpi_world_size * N  * sizeof(float));
     zero_mat(C, M/mpi_world_size, N);
   }
 

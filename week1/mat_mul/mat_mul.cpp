@@ -11,9 +11,9 @@
 // #define _GNU_SOURCE
 #include <sched.h>
 
-#define ITILESIZE (32)
+#define ITILESIZE (64)
 #define JTILESIZE (512)
-#define KTILESIZE (256)
+#define KTILESIZE (480)
 struct ThreadArg
 {
   int M, N, K;
@@ -61,7 +61,15 @@ void *mul_thread(void *arg)
               c = _mm256_fmadd_ps(a3, b3, c);
               c = _mm256_fmadd_ps(a4, b4, c);
               c = _mm256_fmadd_ps(a5, b5, c);
-              _mm256_storeu_ps(C + i * N + j, c);
+              // _mm256_storeu_ps(C + i * N + j, c);
+              C[i * N + j + 7] = c[7];
+              C[i * N + j + 6] = c[6];
+              C[i * N + j + 0] = c[0];
+              C[i * N + j + 1] = c[1];
+              C[i * N + j + 2] = c[2];
+              C[i * N + j + 3] = c[3];
+              C[i * N + j + 4] = c[4];
+              C[i * N + j + 5] = c[5];
             }
             for (; j < boundj; j++)
             {
