@@ -1,7 +1,8 @@
 TARGET=main
 OBJECTS=util.o mat_mul.o
 
-CPPFLAGS=-std=c++11 -O3 -Wall -march=znver2 -mavx2 -mfma -fopenmp -funroll-loops -mfpmath=sse
+CPPFLAGS=-std=c++11 -O3 -Wall -march=znver2 -mavx2 -mfma -fopenmp 
+# -funroll-loops -mfpmath=sse -fgcse-lm -fcx-fortran-rules -fprofile-use
 LDLIBS=-lm -lmpi -lmpi_cxx -lnuma -lpthread
 
 all: $(TARGET)

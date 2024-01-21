@@ -84,7 +84,8 @@ int main(int argc, char **argv) {
     mat_mul(A, B, C, M, N, K, num_threads);
     double elapsed_time = timer_stop(0);
     printf("%f sec\n", elapsed_time);
-    elapsed_time_sum += elapsed_time;
+    if(i>0)
+      elapsed_time_sum += elapsed_time;
   }
 
   if (print_matrix) {
@@ -97,7 +98,7 @@ int main(int argc, char **argv) {
     check_mat_mul(A, B, C, M, N, K);
   }
 
-  double elapsed_time_avg = elapsed_time_sum / num_iterations;
+  double elapsed_time_avg = elapsed_time_sum / (num_iterations-1);
   printf("Avg. time: %f sec\n", elapsed_time_avg);
   printf("Avg. throughput: %f GFLOPS\n", 2.0 * M * N * K / elapsed_time_avg / 1e9);
 
