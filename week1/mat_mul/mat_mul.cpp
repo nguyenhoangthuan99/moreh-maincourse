@@ -227,114 +227,114 @@ void mat_mul(float *_A, float *_B, float *_C, int _M, int _N, int _K, int _num_t
   //  }
 
   // Pthread
-  // int chunk_size = static_cast<int>(std::ceil(static_cast<double>(M) / _num_threads));
-  // pthread_t tid[_num_threads];
-  // ThreadArg arg[_num_threads];
-  // cpu_set_t cpus[_num_threads];
-  // pthread_attr_t attr[_num_threads];
+  int chunk_size = static_cast<int>(std::ceil(static_cast<double>(M) / _num_threads));
+  pthread_t tid[_num_threads];
+  ThreadArg arg[_num_threads];
+  cpu_set_t cpus[_num_threads];
+  pthread_attr_t attr[_num_threads];
 
-  // for (int i = 0; i < _num_threads; i++)
-  // {
-  //   int start = i * chunk_size;
-  //   int end = (i == _num_threads - 1) ? _M : (i + 1) * chunk_size;
-  //   pthread_attr_init(&attr[i]);
-  //   // arg[i].start_i = i * _range;
-  //   // arg[i].end_i = std::min((i + 1) * _range, _M);
-  //   arg[i].A = A + start * K;
-  //   arg[i].B = B;
-  //   arg[i].C = C + start * N;
-  //   arg[i].M = end - start;
-  //   arg[i].N = N;
-  //   arg[i].K = K;
+  for (int i = 0; i < _num_threads; i++)
+  {
+    int start = i * chunk_size;
+    int end = (i == _num_threads - 1) ? _M : (i + 1) * chunk_size;
+    pthread_attr_init(&attr[i]);
+    // arg[i].start_i = i * _range;
+    // arg[i].end_i = std::min((i + 1) * _range, _M);
+    arg[i].A = A + start * K;
+    arg[i].B = B;
+    arg[i].C = C + start * N;
+    arg[i].M = end - start;
+    arg[i].N = N;
+    arg[i].K = K;
 
-  //   CPU_ZERO(&cpus[i]);
-  //   CPU_SET(i, &cpus[i]);
+    CPU_ZERO(&cpus[i]);
+    CPU_SET(i, &cpus[i]);
 
-  //   pthread_attr_setaffinity_np(&attr[i], sizeof(cpu_set_t), &cpus[i]);
+    pthread_attr_setaffinity_np(&attr[i], sizeof(cpu_set_t), &cpus[i]);
 
-  //   pthread_create(&tid[i], &attr[i], mul_thread, &arg[i]);
-  // }
-  // for (int i = 0; i < _num_threads; ++i)
-  // {
-  //   pthread_join(tid[i], NULL);
-  // }
+    pthread_create(&tid[i], &attr[i], mul_thread, &arg[i]);
+  }
+  for (int i = 0; i < _num_threads; ++i)
+  {
+    pthread_join(tid[i], NULL);
+  }
 
   // OPEN MP
 
-    int T_i = ITILESIZE, T_j = JTILESIZE, T_k = KTILESIZE;
-    int jj, kk;
-    // int chunk_size = static_cast<int>(std::ceil(static_cast<double>(M) / _num_threads));
-    // ThreadArg arg[_num_threads];
-    // cpu_set_t cpus[_num_threads];
+  //   int T_i = ITILESIZE, T_j = JTILESIZE, T_k = KTILESIZE;
+  //   int jj, kk;
+  //   // int chunk_size = static_cast<int>(std::ceil(static_cast<double>(M) / _num_threads));
+  //   // ThreadArg arg[_num_threads];
+  //   // cpu_set_t cpus[_num_threads];
 
-    for (int kk = 0; kk < K; kk += T_k)
-    {
-  #pragma omp parallel for num_threads(_num_threads) shared(A, B)
+  //   for (int kk = 0; kk < K; kk += T_k)
+  //   {
+  // #pragma omp parallel for num_threads(_num_threads) shared(A, B)
 
-      for (int ii = 0; ii < M; ii += T_i)
-      {
-        cpu_set_t mask;
-        CPU_ZERO(&mask);
-        int tid = omp_get_thread_num();
-        CPU_SET(tid, &mask);
-        sched_setaffinity(0, sizeof(mask), &mask);
-              for (jj = 0; jj < N; jj += JTILESIZE)
-       {
-         int k, i, j;
-         int boundk = std::min(kk + KTILESIZE, K);
-         int boundi = std::min(ii + ITILESIZE, M);
-         int boundj = std::min(jj + JTILESIZE, N);
-         for (k = kk; k < boundk - 5; k += 6)
-           for (i = ii; i < boundi; i++)
-           {
-             __m256 a0 = _mm256_set1_ps(A[i * K + k + 0]);
-             __m256 a1 = _mm256_set1_ps(A[i * K + k + 1]);
-             __m256 a2 = _mm256_set1_ps(A[i * K + k + 2]);
-             __m256 a3 = _mm256_set1_ps(A[i * K + k + 3]);
-             __m256 a4 = _mm256_set1_ps(A[i * K + k + 4]);
-             __m256 a5 = _mm256_set1_ps(A[i * K + k + 5]);
-             for (j = jj; j < boundj - 7; j += 8)
-             {
-               __m256 b0 = _mm256_loadu_ps(B + (k + 0) * N + j);
-               __m256 b1 = _mm256_loadu_ps(B + (k + 1) * N + j);
-               __m256 b2 = _mm256_loadu_ps(B + (k + 2) * N + j);
-               __m256 b3 = _mm256_loadu_ps(B + (k + 3) * N + j);
-               __m256 b4 = _mm256_loadu_ps(B + (k + 4) * N + j);
-               __m256 b5 = _mm256_loadu_ps(B + (k + 5) * N + j);
-               __m256 c = _mm256_loadu_ps(C + i * N + j);
-               c = _mm256_fmadd_ps(a0, b0, c);
-               c = _mm256_fmadd_ps(a1, b1, c);
-               c = _mm256_fmadd_ps(a2, b2, c);
-               c = _mm256_fmadd_ps(a3, b3, c);
-               c = _mm256_fmadd_ps(a4, b4, c);
-               c = _mm256_fmadd_ps(a5, b5, c);
-               // _mm256_storeu_ps(C + i * N + j, c);
-               C[i * N + j + 7] = c[7];
-               C[i * N + j + 6] = c[6];
-               C[i * N + j + 0] = c[0];
-               C[i * N + j + 1] = c[1];
-               C[i * N + j + 2] = c[2];
-               C[i * N + j + 3] = c[3];
-               C[i * N + j + 4] = c[4];
-               C[i * N + j + 5] = c[5];
-             }
-             for (; j < boundj; j++)
-             {
-               C[i * N + j] += A[i * K + (k + 0)] * B[(k + 0) * N + j];
-               C[i * N + j] += A[i * K + (k + 1)] * B[(k + 1) * N + j];
-               C[i * N + j] += A[i * K + (k + 2)] * B[(k + 2) * N + j];
-               C[i * N + j] += A[i * K + (k + 3)] * B[(k + 3) * N + j];
-               C[i * N + j] += A[i * K + (k + 4)] * B[(k + 4) * N + j];
-               C[i * N + j] += A[i * K + (k + 5)] * B[(k + 5) * N + j];
-             }
-           }
-         for (; k < boundk; k++)
-           for (i = ii; i < boundi; i++)
-             for (j = jj; j < boundj; j++)
-               C[i * N + j] += A[i * K + k] * B[k * N + j];
-       }
-     }
-   }
+  //     for (int ii = 0; ii < M; ii += T_i)
+  //     {
+  //       cpu_set_t mask;
+  //       CPU_ZERO(&mask);
+  //       int tid = omp_get_thread_num();
+  //       CPU_SET(tid, &mask);
+  //       sched_setaffinity(0, sizeof(mask), &mask);
+  //             for (jj = 0; jj < N; jj += JTILESIZE)
+  //      {
+  //        int k, i, j;
+  //        int boundk = std::min(kk + KTILESIZE, K);
+  //        int boundi = std::min(ii + ITILESIZE, M);
+  //        int boundj = std::min(jj + JTILESIZE, N);
+  //        for (k = kk; k < boundk - 5; k += 6)
+  //          for (i = ii; i < boundi; i++)
+  //          {
+  //            __m256 a0 = _mm256_set1_ps(A[i * K + k + 0]);
+  //            __m256 a1 = _mm256_set1_ps(A[i * K + k + 1]);
+  //            __m256 a2 = _mm256_set1_ps(A[i * K + k + 2]);
+  //            __m256 a3 = _mm256_set1_ps(A[i * K + k + 3]);
+  //            __m256 a4 = _mm256_set1_ps(A[i * K + k + 4]);
+  //            __m256 a5 = _mm256_set1_ps(A[i * K + k + 5]);
+  //            for (j = jj; j < boundj - 7; j += 8)
+  //            {
+  //              __m256 b0 = _mm256_loadu_ps(B + (k + 0) * N + j);
+  //              __m256 b1 = _mm256_loadu_ps(B + (k + 1) * N + j);
+  //              __m256 b2 = _mm256_loadu_ps(B + (k + 2) * N + j);
+  //              __m256 b3 = _mm256_loadu_ps(B + (k + 3) * N + j);
+  //              __m256 b4 = _mm256_loadu_ps(B + (k + 4) * N + j);
+  //              __m256 b5 = _mm256_loadu_ps(B + (k + 5) * N + j);
+  //              __m256 c = _mm256_loadu_ps(C + i * N + j);
+  //              c = _mm256_fmadd_ps(a0, b0, c);
+  //              c = _mm256_fmadd_ps(a1, b1, c);
+  //              c = _mm256_fmadd_ps(a2, b2, c);
+  //              c = _mm256_fmadd_ps(a3, b3, c);
+  //              c = _mm256_fmadd_ps(a4, b4, c);
+  //              c = _mm256_fmadd_ps(a5, b5, c);
+  //              // _mm256_storeu_ps(C + i * N + j, c);
+  //              C[i * N + j + 7] = c[7];
+  //              C[i * N + j + 6] = c[6];
+  //              C[i * N + j + 0] = c[0];
+  //              C[i * N + j + 1] = c[1];
+  //              C[i * N + j + 2] = c[2];
+  //              C[i * N + j + 3] = c[3];
+  //              C[i * N + j + 4] = c[4];
+  //              C[i * N + j + 5] = c[5];
+  //            }
+  //            for (; j < boundj; j++)
+  //            {
+  //              C[i * N + j] += A[i * K + (k + 0)] * B[(k + 0) * N + j];
+  //              C[i * N + j] += A[i * K + (k + 1)] * B[(k + 1) * N + j];
+  //              C[i * N + j] += A[i * K + (k + 2)] * B[(k + 2) * N + j];
+  //              C[i * N + j] += A[i * K + (k + 3)] * B[(k + 3) * N + j];
+  //              C[i * N + j] += A[i * K + (k + 4)] * B[(k + 4) * N + j];
+  //              C[i * N + j] += A[i * K + (k + 5)] * B[(k + 5) * N + j];
+  //            }
+  //          }
+  //        for (; k < boundk; k++)
+  //          for (i = ii; i < boundi; i++)
+  //            for (j = jj; j < boundj; j++)
+  //              C[i * N + j] += A[i * K + k] * B[k * N + j];
+  //      }
+  //    }
+  //  }
 
   // OPEN MP GPU
   //   int k, i, j, ii, jj, kk;

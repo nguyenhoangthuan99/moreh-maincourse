@@ -17,7 +17,7 @@
 static int num_threads;
 static int mpi_rank, mpi_world_size;
 
-#define ITILESIZE (64)
+#define ITILESIZE (32)
 #define JTILESIZE (512)
 #define KTILESIZE (512)
 
@@ -111,8 +111,8 @@ static void mat_mul_pthread(float *A, float *B, float *C, int M, int N, int K, i
   // Initialize and start each thread
   for (int i = 0; i < _num_threads; ++i)
   {
-    int start = i * chunk_size;
-    int end = (i == _num_threads - 1) ? M : (i + 1) * chunk_size;
+    int start = M / _num_threads * i + std::min(i, M % _num_threads) ;//i * chunk_size;
+    int end = M / _num_threads * (i + 1) + std::min(i + 1, M % _num_threads);//(i == _num_threads - 1) ? M : (i + 1) * chunk_size;
     params[i]._A = A + start * K;
     params[i]._B = B;
     params[i]._C = C + start * N;
@@ -224,24 +224,32 @@ void mat_mul(float *A, float *B, float *C, int M, int N, int K,
   mpi_world_size = _mpi_world_size;
   MPI_Request request[2];          // = (MPI_Request *)malloc(2 * sizeof(MPI_Request));
   int sendcounts[_mpi_world_size]; //= (int *)malloc(mpi_world_size * sizeof(int));
-  int displ[_mpi_world_size];      // = (int *)malloc(mpi_world_size * sizeof(int));
+  int recvcounts[_mpi_world_size];
+  int displ[_mpi_world_size]; // = (int *)malloc(mpi_world_size * sizeof(int));
+  int displ_C[_mpi_world_size];
   for (int i = 0; i < mpi_world_size; i++)
   {
-    int is = M / _mpi_world_size * i + std::min(i, M % _mpi_world_size);
-    int ie = M / _mpi_world_size * (i + 1) + std::min(i + 1, M % _mpi_world_size);
+    int is = M / _mpi_world_size * i + std::min(i, M % _mpi_world_size);           // M / _mpi_world_size * i;
+    int ie = M / _mpi_world_size * (i + 1) + std::min(i + 1, M % _mpi_world_size); // i + 1 == _mpi_world_size ? M : M / _mpi_world_size * (i + 1); // M / _mpi_world_size * (i + 1) + std::min(i + 1, M % _mpi_world_size);//
     sendcounts[i] = (ie - is) * K;
+    recvcounts[i] = (ie - is) * N;
     displ[i] = is * K;
-    // std::cout<<"\n"<<sendcounts[i]<<" "<<displ[i]<<std::endl;
+    displ_C[i] = is * N;
+    // std::cout << "\n"
+    //           << sendcounts[i] << " " << displ[i] << std::endl;
   }
 
   MPI_Ibcast(B, K * N, MPI_FLOAT, 0, MPI_COMM_WORLD, request);
 
-  MPI_Iscatterv(A, sendcounts, displ, MPI_FLOAT, A, M * K / _mpi_world_size, MPI_FLOAT, 0, MPI_COMM_WORLD, request + 1);
+  MPI_Iscatterv(A, sendcounts, displ, MPI_FLOAT, A, M * K , MPI_FLOAT, 0, MPI_COMM_WORLD, request + 1); // M * K / _mpi_world_size
   M = sendcounts[_mpi_rank] / K;
+  // std::cout << "\nmpi rank " << _mpi_rank << " " << M << " " << sendcounts[_mpi_rank] << " " << displ[_mpi_rank] << std::endl;
   MPI_Request request_result;
-  MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
+  // MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
   // double start = MPI_Wtime();
   mat_mul_pthread(A, B, C, M, N, K, _num_threads, _mpi_rank);
-  MPI_Igatherv(C, M * N, MPI_FLOAT, C, sendcounts, displ, MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
-  MPI_Wait(&request_result, MPI_STATUS_IGNORE);
+  // printf("%d done\n",mpi_rank);
+  MPI_Igatherv(C, M * N, MPI_FLOAT, C, recvcounts, displ_C, MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
+  // MPI_Gather(C, M * N, MPI_FLOAT, C, M*N, MPI_FLOAT, 0, MPI_COMM_WORLD);
+  // MPI_Wait(&request_result, MPI_STATUS_IGNORE);
 }
