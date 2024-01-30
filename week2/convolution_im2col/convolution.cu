@@ -123,7 +123,7 @@ __global__ void reshape_gpu(float *_src, float *_dst, int N, int K, int OH, int 
 
   if (on < N && k < K)
   {
-    const int src_offset = on * K * chunk + k * chunk;
+    const int src_offset = k * N * chunk + on * chunk;
     const int dst_offset = on * K * chunk + k * chunk;
 
     for (int i = 0; i < chunk; ++i)
@@ -141,6 +141,8 @@ __global__ void reshape_gpu(float *_src, float *_dst, int N, int K, int OH, int 
     }
   }
 }
+
+
 void reshape(float *_src, float *_dst, int N, int K, int OH, int OW)
 {
   size_t chunk = OH * OW;
@@ -168,27 +170,27 @@ void convolution(float *_I, float *_F, float *_O, float *_BUF1, float *_BUF2, in
   //                              dilation_w);
   float *I = _I, *F = _F, *O = _O, *BUF1 = _BUF1, *BUF2 = _BUF2;
   cudaSetDevice(0);
-
+  int num_stream_blocks = min(BLOCKS,N);
   cudaStream_t data_h2d_stream, data_d2h_stream, calc_im2col_stream, calc_matmul_stream;
   cudaStreamCreate(&data_h2d_stream);
   cudaStreamCreate(&data_d2h_stream);
   cudaStreamCreate(&calc_im2col_stream);
   cudaStreamCreate(&calc_matmul_stream);
-  cudaEvent_t events_data[BLOCKS], events_im2col_cals[BLOCKS], events_matmul_cals[BLOCKS];
+  cudaEvent_t events_data[num_stream_blocks], events_im2col_cals[num_stream_blocks], events_matmul_cals[num_stream_blocks];
 
-  for (int i = 0; i < BLOCKS; i++)
+  for (int i = 0; i < num_stream_blocks; i++)
   {
     cudaEventCreate(&events_data[i]);
     cudaEventCreate(&events_im2col_cals[i]);
     cudaEventCreate(&events_matmul_cals[i]);
   }
 
-  int Nbegin[BLOCKS], Nend[BLOCKS];
-  for (size_t i = 0; i < BLOCKS; i++)
+  int Nbegin[num_stream_blocks], Nend[num_stream_blocks];
+  for (size_t i = 0; i < num_stream_blocks; i++)
   {
-    Nbegin[i] = N / BLOCKS * i;
-    Nend[i] = N / BLOCKS * (i + 1);
-    if (i == BLOCKS - 1)
+    Nbegin[i] = N / num_stream_blocks * i;
+    Nend[i] = N / num_stream_blocks * (i + 1);
+    if (i == num_stream_blocks - 1)
       Nend[i] = N;
   }
 
@@ -197,13 +199,13 @@ void convolution(float *_I, float *_F, float *_O, float *_BUF1, float *_BUF2, in
 
   cudaMemcpyAsync(F_gpu, _F, sizeof(float) * K * C * R * S, cudaMemcpyHostToDevice, data_h2d_stream);
 
-  for (int i = 0; i < BLOCKS; i++)
+  for (int i = 0; i < num_stream_blocks; i++)
   {
     cudaMemcpyAsync(&I_gpu[Nbegin[i] * C * H * W], &_I[Nbegin[i] * C * H * W], sizeof(float) * (Nend[i] - Nbegin[i]) * C * H * W, cudaMemcpyHostToDevice, data_h2d_stream);
     cudaEventRecord(events_data[i], data_h2d_stream);
   }
 
-  for (int i = 0; i < BLOCKS; i++)
+  for (int i = 0; i < num_stream_blocks; i++)
   {
     dim3 blockDimIm2Col(768);
     dim3 gridDimIm2Col((OH * OW * (Nend[i] - Nbegin[i]) + blockDimIm2Col.x - 1) / blockDimIm2Col.x);
@@ -221,6 +223,12 @@ void convolution(float *_I, float *_F, float *_O, float *_BUF1, float *_BUF2, in
                                                              &BUF2_gpu[Nbegin[i] * K * OH * OW],
                                                              K, (Nend[i] - Nbegin[i]) * OH * OW, C * R * S,
                                                              (Nend[i] - Nbegin[i]));
+    // start reshape GPU
+    // dim3 reshape_dimBlock(16, 16);
+    // dim3 reshape_dimGrid(((Nend[i] - Nbegin[i]) + reshape_dimBlock.x - 1) / reshape_dimBlock.x, (K + reshape_dimBlock.y - 1) / reshape_dimBlock.y);
+    // reshape_gpu<<<reshape_dimGrid, reshape_dimBlock, K * (Nend[i] - Nbegin[i]) * OH * OW * sizeof(float),calc_matmul_stream>>>(&BUF2_gpu[Nbegin[i] * K * OH * OW], &O_gpu[Nbegin[i] * K * OH * OW], (Nend[i] - Nbegin[i]), K, OH, OW);
+
+    //      
     cudaEventRecord(events_matmul_cals[i], calc_matmul_stream);
 
     cudaStreamWaitEvent(data_d2h_stream, events_matmul_cals[i]);
@@ -245,7 +253,7 @@ void convolution_init(int N, int C, int H, int W, int K, int R, int S,
   const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
   const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
   CHECK_CUDA(cudaMalloc(&I_gpu, sizeof(float) * N * C * H * W));
-  // CHECK_CUDA(cudaMalloc(&O_gpu, sizeof(float) * ON * OH * OW * OC));
+  CHECK_CUDA(cudaMalloc(&O_gpu, sizeof(float) * ON * OH * OW * OC));
   CHECK_CUDA(cudaMalloc(&F_gpu, sizeof(float) * K * C * R * S));
   CHECK_CUDA(cudaMalloc(&BUF1_gpu, sizeof(float) * C * R * S * ON * OH * OW));
   CHECK_CUDA(cudaMalloc(&BUF2_gpu, sizeof(float) * K * N * OH * OW));
@@ -259,7 +267,7 @@ void convolution_cleanup(float *_I, float *_F, float *_O, int N, int C, int H,
 {
   cudaFree(I_gpu);
   cudaFree(F_gpu);
-  // cudaFree(O_gpu);
+  cudaFree(O_gpu);
   cudaFree(BUF1_gpu);
   cudaFree(BUF2_gpu);
   CHECK_CUDA(cudaDeviceSynchronize());

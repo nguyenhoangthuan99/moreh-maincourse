@@ -3,7 +3,7 @@
 #include "matmul.h"
 #include "util.h"
 // extern __device__ int g[N];
-#define BLOCK_SIZE 32
+#define BLOCK_SIZE 16
 #define BLOCKS 4
 #define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
 // extern __device__ void vecmul(float *_A, float *_B, int idx, int idy, int K, int N, float *sum);
@@ -46,25 +46,29 @@ __global__ void matmul_gpu(float *_A, float *_B, float *_C, int M, int N, int K)
   int idy = blockIdx.y * blockDim.y + threadIdx.y;
   int k;
   __shared__ float As[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float A1[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float A2[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float A3[BLOCK_SIZE][BLOCK_SIZE];
+  
   __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B1[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B2[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B3[BLOCK_SIZE][BLOCK_SIZE];
-  // __shared__ float B4[BLOCK_SIZE][BLOCK_SIZE];
-  // __shared__ float B5[BLOCK_SIZE][BLOCK_SIZE];
-  // __shared__ float B6[BLOCK_SIZE][BLOCK_SIZE];
-  // __shared__ float B7[BLOCK_SIZE][BLOCK_SIZE];
+
   float c0;
   // float sum[8] = {0.0f};//, sum1 = 0., sum2 = 0., sum3 = 0., sum4 = 0, sum5 = 0, sum6 = 0, sum7 = 0;
-  float4 sum = make_float4(0, 0, 0, 0);
+  float sum[4][4] = {0};
   // float4 sum2 = make_float4(0, 0, 0, 0);
   int boundk = (K + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  int aid = idy * K + threadIdx.x;
+  int aid = 4 * idy * K + threadIdx.x;
   int bid = threadIdx.y * N + idx * 4;
   // printf("%d %d - %d %d\n", aid, bid, idx, idy);
   for (k = 0; k < boundk; k++)
   {
-    As[threadIdx.y][threadIdx.x] = (idy < M) && k * BLOCK_SIZE + threadIdx.x < K ? _A[aid] : 0;
+    As[threadIdx.y][threadIdx.x] = (idy * 4 < M) && k * BLOCK_SIZE + threadIdx.x < K ? _A[aid] : 0;
+    A1[threadIdx.y][threadIdx.x] = (idy * 4 + 1 < M) && k * BLOCK_SIZE + threadIdx.x < K ? _A[aid + K] : 0;
+    A2[threadIdx.y][threadIdx.x] = (idy * 4 + 2 < M) && k * BLOCK_SIZE + threadIdx.x < K ? _A[aid + 2 * K] : 0;
+    A3[threadIdx.y][threadIdx.x] = (idy * 4 + 3 < M) && k * BLOCK_SIZE + threadIdx.x < K ? _A[aid + 3 * K] : 0;
     Bs[threadIdx.y][threadIdx.x] = (idx * 4 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid] : 0;
     B1[threadIdx.y][threadIdx.x] = (idx * 4 + 1 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid + 1] : 0;
     B2[threadIdx.y][threadIdx.x] = (idx * 4 + 2 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid + 2] : 0;
@@ -76,35 +80,55 @@ __global__ void matmul_gpu(float *_A, float *_B, float *_C, int M, int N, int K)
     __syncthreads();
 
     // #pragma unroll 32
-    for (int e = 0; e < BLOCK_SIZE; e++)
+    for (int ex = 0; ex < BLOCK_SIZE; ex++)
     {
-      float a = As[threadIdx.y][e];
-      sum = make_float4(sum.x + a * Bs[e][threadIdx.x], sum.y + a * B1[e][threadIdx.x], sum.z + a * B2[e][threadIdx.x], sum.w + a * B3[e][threadIdx.x]);
+      float a0 = As[threadIdx.y][ex];
+      float a1 = A1[threadIdx.y][ex];
+      float a2 = A2[threadIdx.y][ex];
+      float a3 = A3[threadIdx.y][ex];
+      float b0 = Bs[ex][threadIdx.x];
+      float b1 = B1[ex][threadIdx.x];
+      float b2 = B2[ex][threadIdx.x];
+      float b3 = B3[ex][threadIdx.x];
+
+      // sum = make_float4(sum.x + a * Bs[e][threadIdx.x], sum.y + a * B1[e][threadIdx.x], sum.z + a * B2[e][threadIdx.x], sum.w + a * B3[e][threadIdx.x]);
       // sum2 = make_float4(sum.x + a * B4[e][threadIdx.x], sum.y + a * B5[e][threadIdx.x], sum.z + a * B6[e][threadIdx.x], sum.w + a * B7[e][threadIdx.x]);
-      // sum[0] += a * Bs[e][threadIdx.x];
-      // sum[1] += a * B1[e][threadIdx.x];
-      // sum[2] += a * B2[e][threadIdx.x];
-      // sum[3] += a * B3[e][threadIdx.x];
-      // sum[4] += a * B4[e][threadIdx.x];
-      // sum[5] += a * B5[e][threadIdx.x];
-      // sum[6] += a * B6[e][threadIdx.x];
-      // sum[7] += a * B7[e][threadIdx.x];
+      sum[0][0] += a0 * b0;
+      sum[0][1] += a0 * b1;
+      sum[0][2] += a0 * b2;
+      sum[0][3] += a0 * b3;
+
+      sum[1][0] += a1 * b0;
+      sum[1][1] += a1 * b1;
+      sum[1][2] += a1 * b2;
+      sum[1][3] += a1 * b3;
+
+      sum[2][0] += a2 * b0;
+      sum[2][1] += a2 * b1;
+      sum[2][2] += a2 * b2;
+      sum[2][3] += a2 * b3;
+
+      sum[3][0] += a3 * b0;
+      sum[3][1] += a3 * b1;
+      sum[3][2] += a3 * b2;
+      sum[3][3] += a3 * b3;
     }
     __syncthreads();
     aid += BLOCK_SIZE;
     bid += BLOCK_SIZE * N;
   }
-  if (idy < M)
-  {
+ 
     // reinterpret_cast<float4 *>(_C)[idx * 8 + idy * N] = sum;
     // reinterpret_cast<float4 *>(_C)[idx * 8 + 4 + idy * N] = sum;
-        float left = min(4, N - idx * 4);
-    #pragma unroll 4
-        for (int i = 0; i < left; i++)
-        {
-          _C[idx * 4 + i + idy * N] = ((float*)(&sum))[i];
-        }
-  }
+    float left = min(4, N - idx * 4);
+    float left_j = min(4, M - idy * 4);
+// #pragma unroll 4
+    for (int j = 0; j < left_j; j++)
+    {
+      for (int i = 0; i < left; i++)
+        _C[idx * 4 + i + (idy * 4 + j) * N] = sum[j][i];
+    }
+  
 }
 
 void matmul_thread(float *_A, float *_B, float *_C, int M, int N, int K, int gpu_id = 0)
@@ -151,7 +175,7 @@ void matmul_thread(float *_A, float *_B, float *_C, int M, int N, int K, int gpu
   for (int i = 0; i < BLOCKS; i++)
   {
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE, 1);
-    dim3 gridDim(((N + 3) / 4 + blockDim.x - 1) / blockDim.x, ((Mend[i] - Mbegin[i]) + blockDim.y - 1) / blockDim.y, 1);
+    dim3 gridDim(((N + 3) / 4 + blockDim.x - 1) / blockDim.x, (((Mend[i] - Mbegin[i])+3)/4 + blockDim.y - 1) / blockDim.y, 1);
     // dim3 gridDim((N + blockDim.x - 1) / blockDim.x, ((Mend[i] - Mbegin[i]) + blockDim.y - 1) / blockDim.y, 1);
 
     // printf("\n%d %d\n", ((N + 3) / 4 + blockDim.x - 1) / blockDim.x, ((Mend[i] - Mbegin[i]) + blockDim.y - 1) / blockDim.y);

@@ -21,7 +21,6 @@
       exit(EXIT_FAILURE);                                                \
     }                                                                    \
   } while (0)
-
 double get_time()
 {
   struct timeval tv;
@@ -37,12 +36,20 @@ half *alloc_tensor(int N, int C, int H, int W)
   return m;
 }
 
+float *alloc_tensor32(int N, int C, int H, int W)
+{
+  // float *m = (float *)aligned_alloc(32, N * C * H * W * sizeof(float));
+    float *m;
+  CHECK_CUDA(cudaMallocHost(&m, sizeof(float) * N * C * H * W));
+  return m;
+}
+
 void rand_tensor(half *m, int N, int C, int H, int W)
 {
   int L = N * C * H * W;
   for (int j = 0; j < L; j++)
   {
-    m[j] = (half)(float)rand() / RAND_MAX - 0.5;
+    m[j] = (half)((float)rand() / RAND_MAX - 0.5);
   }
 }
 
@@ -50,6 +57,12 @@ void zero_tensor(half *m, int N, int C, int H, int W)
 {
   int L = N * C * H * W;
   memset((void *)m, 0, sizeof(half) * L);
+}
+
+void zero_tensor32(float *m, int N, int C, int H, int W)
+{
+  int L = N * C * H * W;
+  memset((void *)m, 0, sizeof(float) * L);
 }
 
 void print_tensor(half *m, int N, int C, int H, int W)
@@ -71,17 +84,36 @@ void print_tensor(half *m, int N, int C, int H, int W)
   }
 }
 
-void check_convolution(half *I, half *F, half *O, int N, int C, int H, int W,
+void print_tensor32(float *m, int N, int C, int H, int W)
+{
+  for (int n = 0; n < N; ++n)
+  {
+    for (int c = 0; c < C; ++c)
+    {
+      printf("Batch %d, Channel %d\n", n, c);
+      for (int h = 0; h < H; ++h)
+      {
+        for (int w = 0; w < W; ++w)
+        {
+          printf("%+.3f ", (float)(m[((n * C + c) * H + h) * W + w]));
+        }
+        printf("\n");
+      }
+    }
+  }
+}
+
+void check_convolution(half *I, half *F, float *O, int N, int C, int H, int W,
                        int K, int R, int S, int pad_h, int pad_w, int stride_h,
                        int stride_w, int dilation_h, int dilation_w)
 {
-  half *O_ans;
+  float *O_ans;
   const int ON = N;
   const int OC = K;
   const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
   const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
-  O_ans = alloc_tensor(ON, OC, OH, OW);
-  zero_tensor(O_ans, ON, OC, OH, OW);
+  O_ans = alloc_tensor32(ON, OC, OH, OW);
+  zero_tensor32(O_ans, ON, OC, OH, OW);
 
 #pragma omp parallel for
   for (int on = 0; on < ON; ++on)
@@ -92,7 +124,7 @@ void check_convolution(half *I, half *F, half *O, int N, int C, int H, int W,
       {
         for (int ow = 0; ow < OW; ++ow)
         {
-          half sum = (half)0.0;
+          float sum = 0.0f;
           for (int c = 0; c < C; ++c)
           {
             for (int r = 0; r < R; ++r)
@@ -105,8 +137,8 @@ void check_convolution(half *I, half *F, half *O, int N, int C, int H, int W,
                 const int k = oc;
                 if (h < 0 || h >= H || w < 0 || w >= W)
                   continue;
-                sum = sum + (half)(I[((n * C + c) * H + h) * W + w] *
-                                   F[((k * C + c) * R + r) * S + s]);
+                sum = sum + ((float)I[((n * C + c) * H + h) * W + w] *
+                             (float)F[((k * C + c) * R + r) * S + s]);
               }
             }
           }
@@ -118,7 +150,7 @@ void check_convolution(half *I, half *F, half *O, int N, int C, int H, int W,
 
   bool is_valid = true;
   int cnt = 0, thr = 10;
-  half eps = (half)1e-3;
+  float eps = 1e-3f;
   for (int on = 0; on < ON; ++on)
   {
     for (int oc = 0; oc < OC; ++oc)
@@ -127,10 +159,13 @@ void check_convolution(half *I, half *F, half *O, int N, int C, int H, int W,
       {
         for (int ow = 0; ow < OW; ++ow)
         {
-          half o = O[((on * OC + oc) * OH + oh) * OW + ow];
-          half o_ans = O_ans[((on * OC + oc) * OH + oh) * OW + ow];
-          if (fabsf(o - o_ans) > eps &&
-              (o_ans == 0 || fabsf((o - o_ans) / o_ans) > eps))
+          float o = O[((on * OC + oc) * OH + oh) * OW + ow];
+          float o_ans = O_ans[((on * OC + oc) * OH + oh) * OW + ow];
+
+          // printf("original : %f, calc : %f\n",o_ans,o);
+
+          if (fabsf(fabsf(o) - fabsf(o_ans)) > eps &&
+              (o_ans == 0 || fabsf((fabsf(o) - fabsf(o_ans)) / o_ans) > eps))
           {
             ++cnt;
             if (cnt <= thr)

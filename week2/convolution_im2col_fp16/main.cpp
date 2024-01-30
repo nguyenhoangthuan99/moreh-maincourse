@@ -100,7 +100,8 @@ int main(int argc, char **argv) {
 
   /* Allocate and initialize tensor on CPU */
   printf("Initializing... ");
-  half *I, *F, *O, *BUF1, *BUF2;
+  half *I, *F, *BUF1;
+  float *O, *BUF2;
   I = alloc_tensor(N, C, H, W);
   F = alloc_tensor(K, C, R, S);
   printf("done!\n");
@@ -109,9 +110,9 @@ int main(int argc, char **argv) {
   const int OC = K;
   const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
   const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
-  O = alloc_tensor(ON, OC, OH, OW);
+  O = alloc_tensor32(ON, OC, OH, OW);
   BUF1 = alloc_tensor(C, R, S, N * OH * OW);
-  BUF2 = alloc_tensor(K, N, OH, OW);
+  BUF2 = alloc_tensor32(K, N, OH, OW);
 
   rand_tensor(I, N, C, H, W);
   rand_tensor(F, K, C, R, S);
@@ -126,7 +127,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < num_iterations; ++i) {
     printf("Calculating...(iter=%d) ", i);
     fflush(stdout);
-    zero_tensor(O, ON, OC, OH, OW);
+    zero_tensor32(O, ON, OC, OH, OW);
     double start_time = get_time();
     convolution(I, F, O, BUF1, BUF2, N, C, H, W, K, R, S, pad_h, pad_w,
                 stride_h, stride_w, dilation_h, dilation_w);
@@ -141,17 +142,17 @@ int main(int argc, char **argv) {
     printf("FILTER:\n");
     print_tensor(F, K, C, R, S);
     printf("OUTPUT:\n");
-    print_tensor(O, ON, OC, OH, OW);
+    print_tensor32(O, ON, OC, OH, OW);
   }
-
-  /* Cleanup convolution */
-  convolution_cleanup(I, F, O, N, C, H, W, K, R, S, pad_h, pad_w, stride_h,
-                      stride_w, dilation_h, dilation_w);
 
   if (validation) {
     check_convolution(I, F, O, N, C, H, W, K, R, S, pad_h, pad_w, stride_h,
                       stride_w, dilation_h, dilation_w);
   }
+
+    /* Cleanup convolution */
+  convolution_cleanup(I, F, O, N, C, H, W, K, R, S, pad_h, pad_w, stride_h,
+                      stride_w, dilation_h, dilation_w);
 
   /* Print performance results */
   double elapsed_time_avg = elapsed_time_sum / num_iterations;
