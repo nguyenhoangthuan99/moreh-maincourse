@@ -1,15 +1,17 @@
 #include <cstdlib>
 #include <cstdio>
+#include <cuda_fp16.h>
 #include "convolution.cuh"
 #include "util.h"
-
+#include <thread>
 #include <cublas_v2.h>
 
 #define BLOCKS 16
 #define BLOCK_SIZE 16
 static int ngpu;
-static half *I_gpu, *F_gpu, *BUF1_gpu;
-static float *BUF2_gpu, *O_gpu;
+static half *I_gpu[1024], *F_gpu[1024], *BUF1_gpu[1024];
+static float *BUF2_gpu[1024], *O_gpu[1024];
+static int N_gpu_start[1024], N_gpu_end[1024];
 #define CHECK_CUDA(call)                                                 \
   do                                                                     \
   {                                                                      \
@@ -76,9 +78,9 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
   __shared__ float B2[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B3[BLOCK_SIZE][BLOCK_SIZE];
 
-  float c0;
   // float sum[8] = {0.0f};//, sum1 = 0., sum2 = 0., sum3 = 0., sum4 = 0, sum5 = 0, sum6 = 0, sum7 = 0;
   float sum[4][4] = {0};
+  float zero_half = 0.;
   // float4 sum2 = make_float4(0, 0, 0, 0);
   int boundk = (K + BLOCK_SIZE - 1) / BLOCK_SIZE;
   int aid = 4 * idy * K + threadIdx.x;
@@ -86,18 +88,14 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
   // printf("%d %d - %d %d\n", aid, bid, idx, idy);
   for (k = 0; k < boundk; k++)
   {
-    As[threadIdx.y][threadIdx.x] = (idy * 4 < M) && k * BLOCK_SIZE + threadIdx.x < K ?(float) _A[aid] : 0;
-    A1[threadIdx.y][threadIdx.x] = (idy * 4 + 1 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + K] : 0;
-    A2[threadIdx.y][threadIdx.x] = (idy * 4 + 2 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + 2 * K] : 0;
-    A3[threadIdx.y][threadIdx.x] = (idy * 4 + 3 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + 3 * K] : 0;
-    Bs[threadIdx.y][threadIdx.x] = (idx * 4 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid] : 0;
-    B1[threadIdx.y][threadIdx.x] = (idx * 4 + 1 < N) && k * BLOCK_SIZE + threadIdx.y < K ?(float) _B[bid + 1] : 0;
-    B2[threadIdx.y][threadIdx.x] = (idx * 4 + 2 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 2] : 0;
-    B3[threadIdx.y][threadIdx.x] = (idx * 4 + 3 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 3] : 0;
-    // B4[threadIdx.y][threadIdx.x] = (idx * 8 + 4 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid + 4] : 0;
-    // B5[threadIdx.y][threadIdx.x] = (idx * 8 + 5 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid + 5] : 0;
-    // B6[threadIdx.y][threadIdx.x] = (idx * 8 + 6 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid + 6] : 0;
-    // B7[threadIdx.y][threadIdx.x] = (idx * 8 + 7 < N) && k * BLOCK_SIZE + threadIdx.y < K ? _B[bid + 7] : 0;
+    As[threadIdx.y][threadIdx.x] = (idy * 4 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid] : zero_half;
+    A1[threadIdx.y][threadIdx.x] = (idy * 4 + 1 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + K] : zero_half;
+    A2[threadIdx.y][threadIdx.x] = (idy * 4 + 2 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + 2 * K] : zero_half;
+    A3[threadIdx.y][threadIdx.x] = (idy * 4 + 3 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + 3 * K] : zero_half;
+    Bs[threadIdx.y][threadIdx.x] = (idx * 4 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid] : zero_half;
+    B1[threadIdx.y][threadIdx.x] = (idx * 4 + 1 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 1] : zero_half;
+    B2[threadIdx.y][threadIdx.x] = (idx * 4 + 2 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 2] : zero_half;
+    B3[threadIdx.y][threadIdx.x] = (idx * 4 + 3 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 3] : zero_half;
     __syncthreads();
 
     // #pragma unroll 32
@@ -112,8 +110,6 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
       float b2 = B2[ex][threadIdx.x];
       float b3 = B3[ex][threadIdx.x];
 
-      // sum = make_float4(sum.x + a * Bs[e][threadIdx.x], sum.y + a * B1[e][threadIdx.x], sum.z + a * B2[e][threadIdx.x], sum.w + a * B3[e][threadIdx.x]);
-      // sum2 = make_float4(sum.x + a * B4[e][threadIdx.x], sum.y + a * B5[e][threadIdx.x], sum.z + a * B6[e][threadIdx.x], sum.w + a * B7[e][threadIdx.x]);
       sum[0][0] += a0 * b0;
       sum[0][1] += a0 * b1;
       sum[0][2] += a0 * b2;
@@ -143,8 +139,10 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
   int temp_K = M, temp_OHOW = N / temp_N;
   float left = min(4, N - idx * 4);
   float left_j = min(4, M - idy * 4);
+#pragma unroll
   for (int j = 0; j < left_j; j++)
   {
+#pragma unroll
     for (int i = 0; i < left; i++)
     {
       int c_index = idx * 4 + i + (idy * 4 + j) * N;
@@ -155,67 +153,11 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
       _C[new_c_index] = sum[j][i];
     }
   }
-
-  // for (int i = 0; i < left; i++)
-  // {
-  //   int c_index = idx * 4 + i + idy * N;
-  //   int ohow = c_index % temp_OHOW;
-  //   int n = c_index / temp_OHOW % temp_N;
-  //   k = c_index / temp_OHOW / temp_N;
-  //   int new_c_index = ((n * temp_K + k) * temp_OHOW + ohow);
-
-  //   _C[new_c_index] = ((float *)(&sum))[i];
-  // }
-}
-__global__ void reshape_gpu(half *_src, half *_dst, int N, int K, int OH, int OW)
-{
-  extern __shared__ half shared[];
-  size_t chunk = OH * OW;
-
-  const int on = blockDim.x * blockIdx.x + threadIdx.x;
-  const int k = blockDim.y * blockIdx.y + threadIdx.y;
-
-  if (on < N && k < K)
-  {
-    const int src_offset = k * N * chunk + on * chunk;
-    const int dst_offset = on * K * chunk + k * chunk;
-
-    for (int i = 0; i < chunk; ++i)
-    {
-      shared[threadIdx.x * blockDim.y + threadIdx.y + i] =
-          _src[src_offset + i];
-    }
-
-    __syncthreads();
-
-    for (int i = 0; i < chunk; ++i)
-    {
-      _dst[dst_offset + i] =
-          shared[threadIdx.x * blockDim.y + threadIdx.y + i];
-    }
-  }
 }
 
-void reshape(half *_src, half *_dst, int N, int K, int OH, int OW)
-{
-  size_t chunk = OH * OW;
-#pragma omp parallel for num_threads(32)
-  for (int k = 0; k < K; ++k)
-    for (int on = 0; on < N; ++on)
-    {
-      // for (int idx = 0; idx < K * N; idx++)
-      {
-        // int k = idx % K;
-        // int on = idx / K;
-        memcpy((void *)(_dst + ((on * K + k) * chunk)),
-               (void *)(_src + ((k * N + on) * chunk)), chunk * sizeof(half));
-      }
-    }
-}
-
-void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N,
-                 int C, int H, int W, int K, int R, int S, int pad_h, int pad_w,
-                 int stride_h, int stride_w, int dilation_h, int dilation_w)
+void convolution_thread(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N,
+                        int C, int H, int W, int K, int R, int S, int pad_h, int pad_w,
+                        int stride_h, int stride_w, int dilation_h, int dilation_w, int gpu_id = 0)
 {
   // Remove this line after you complete the convolution on GPU
   // naive_cpu_convolution_im2col(_I, _F, _O, _BUF1, _BUF2, N, C, H, W, K, R, S,
@@ -223,7 +165,7 @@ void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N
   //                              dilation_w);
   half *I = _I, *F = _F, *BUF1 = _BUF1;
   float *O = _O, *BUF2 = _BUF2;
-  cudaSetDevice(0);
+  cudaSetDevice(gpu_id);
   int num_stream_blocks = min(BLOCKS, N);
   cudaStream_t data_h2d_stream, data_d2h_stream, calc_im2col_stream, calc_matmul_stream;
   cudaStreamCreate(&data_h2d_stream);
@@ -251,11 +193,11 @@ void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N
   const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
   const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
 
-  cudaMemcpyAsync(F_gpu, _F, sizeof(half) * K * C * R * S, cudaMemcpyHostToDevice, data_h2d_stream);
+  cudaMemcpyAsync(F_gpu[gpu_id], _F, sizeof(half) * K * C * R * S, cudaMemcpyHostToDevice, data_h2d_stream);
 
   for (int i = 0; i < num_stream_blocks; i++)
   {
-    cudaMemcpyAsync(&I_gpu[Nbegin[i] * C * H * W], &_I[Nbegin[i] * C * H * W], sizeof(half) * (Nend[i] - Nbegin[i]) * C * H * W, cudaMemcpyHostToDevice, data_h2d_stream);
+    cudaMemcpyAsync(&I_gpu[gpu_id][Nbegin[i] * C * H * W], &_I[Nbegin[i] * C * H * W], sizeof(half) * (Nend[i] - Nbegin[i]) * C * H * W, cudaMemcpyHostToDevice, data_h2d_stream);
     cudaEventRecord(events_data[i], data_h2d_stream);
   }
 
@@ -264,17 +206,17 @@ void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N
     dim3 blockDimIm2Col(768);
     dim3 gridDimIm2Col((OH * OW * (Nend[i] - Nbegin[i]) + blockDimIm2Col.x - 1) / blockDimIm2Col.x);
     cudaStreamWaitEvent(calc_im2col_stream, events_data[i]);
-    im2col_kernel<<<gridDimIm2Col, blockDimIm2Col, 0, calc_im2col_stream>>>(&I_gpu[Nbegin[i] * C * H * W], &BUF1_gpu[Nbegin[i] * C * R * S * OH * OW],
+    im2col_kernel<<<gridDimIm2Col, blockDimIm2Col, 0, calc_im2col_stream>>>(&I_gpu[gpu_id][Nbegin[i] * C * H * W], &BUF1_gpu[gpu_id][Nbegin[i] * C * R * S * OH * OW],
                                                                             (Nend[i] - Nbegin[i]), C, H, W,
                                                                             R, S, pad_h, pad_w, stride_h,
                                                                             stride_w, dilation_h, dilation_w);
     cudaEventRecord(events_im2col_cals[i], calc_im2col_stream);
     // CHECK_CUDA(cudaDeviceSynchronize());
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE, 1);
-    dim3 gridDim((((Nend[i] - Nbegin[i]) * OH * OW + 3) / 4 + blockDim.x - 1) / blockDim.x, ((K+3)/4 + blockDim.y - 1) / blockDim.y, 1);
+    dim3 gridDim((((Nend[i] - Nbegin[i]) * OH * OW + 3) / 4 + blockDim.x - 1) / blockDim.x, ((K + 3) / 4 + blockDim.y - 1) / blockDim.y, 1);
     cudaStreamWaitEvent(calc_matmul_stream, events_im2col_cals[i]);
-    matmul_gpu<<<gridDim, blockDim, 0, calc_matmul_stream>>>(F_gpu, &BUF1_gpu[Nbegin[i] * C * R * S * OH * OW],
-                                                             &BUF2_gpu[Nbegin[i] * K * OH * OW],
+    matmul_gpu<<<gridDim, blockDim, 0, calc_matmul_stream>>>(F_gpu[gpu_id], &BUF1_gpu[gpu_id][Nbegin[i] * C * R * S * OH * OW],
+                                                             &BUF2_gpu[gpu_id][Nbegin[i] * K * OH * OW],
                                                              K, (Nend[i] - Nbegin[i]) * OH * OW, C * R * S,
                                                              (Nend[i] - Nbegin[i]));
     // start reshape GPU
@@ -286,7 +228,7 @@ void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N
     cudaEventRecord(events_matmul_cals[i], calc_matmul_stream);
 
     cudaStreamWaitEvent(data_d2h_stream, events_matmul_cals[i]);
-    cudaMemcpyAsync(&_O[Nbegin[i] * K * OH * OW], &BUF2_gpu[Nbegin[i] * K * OH * OW], sizeof(float) * K * (Nend[i] - Nbegin[i]) * OH * OW, cudaMemcpyDeviceToHost, data_d2h_stream);
+    cudaMemcpyAsync(&_O[Nbegin[i] * K * OH * OW], &BUF2_gpu[gpu_id][Nbegin[i] * K * OH * OW], sizeof(float) * K * (Nend[i] - Nbegin[i]) * OH * OW, cudaMemcpyDeviceToHost, data_d2h_stream);
   }
 
   CHECK_CUDA(cudaDeviceSynchronize());
@@ -297,20 +239,56 @@ void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N
   // CHECK_CUDA(cudaDeviceSynchronize());
 }
 
+void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N,
+                 int C, int H, int W, int K, int R, int S, int pad_h, int pad_w,
+                 int stride_h, int stride_w, int dilation_h, int dilation_w)
+{
+    const int ON = N;
+  const int OC = K;
+  const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
+  const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
+  std::thread threads[ngpu];
+  for (int i = 0; i < ngpu; i++)
+    threads[i] = std::thread(convolution_thread, &_I[N_gpu_start[i] * C * H * W], _F, &_O[N_gpu_start[i] * K * OH * OW], 
+                             BUF1_gpu[i], 
+                              BUF2_gpu[i],
+                             (N_gpu_end[i] - N_gpu_start[i]), C, H, W, K, R, S, pad_h, pad_w,
+                             stride_h, stride_w, dilation_h, dilation_w, i);
+  /* Wait for all threads finish */
+
+  for (int i = 0; i < ngpu; i++)
+    threads[i].join();
+}
+
 void convolution_initialize(int N, int C, int H, int W, int K, int R, int S,
                             int pad_h, int pad_w, int stride_h, int stride_w,
                             int dilation_h, int dilation_w)
 {
-
   const int ON = N;
   const int OC = K;
   const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
   const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
-  CHECK_CUDA(cudaMalloc(&I_gpu, sizeof(half) * N * C * H * W));
-  // CHECK_CUDA(cudaMalloc(&O_gpu, sizeof(float) * ON * OH * OW * OC));
-  CHECK_CUDA(cudaMalloc(&F_gpu, sizeof(half) * K * C * R * S));
-  CHECK_CUDA(cudaMalloc(&BUF1_gpu, sizeof(half) * C * R * S * ON * OH * OW));
-  CHECK_CUDA(cudaMalloc(&BUF2_gpu, sizeof(float) * K * N * OH * OW));
+  cudaGetDeviceCount(&ngpu);
+  // ngpu = 1;
+  printf("\nNum GPUs: %d\n",ngpu);
+  for (size_t i = 0; i < ngpu; i++)
+  {
+    N_gpu_start[i] = N / ngpu * i;
+    N_gpu_end[i] = N / ngpu * (i + 1);
+    if (i == ngpu - 1)
+      N_gpu_end[i] = N;
+  }
+
+  for (int i = 0; i < ngpu; i++)
+  {
+    cudaSetDevice(i);
+    CHECK_CUDA(cudaMalloc(&I_gpu[i], sizeof(half) * (N_gpu_end[i] - N_gpu_start[i]) * C * H * W));
+    // CHECK_CUDA(cudaMalloc(&O_gpu, sizeof(float) * ON * OH * OW * OC));
+    CHECK_CUDA(cudaMalloc(&F_gpu[i], sizeof(half) * K * C * R * S));
+    CHECK_CUDA(cudaMalloc(&BUF1_gpu[i], sizeof(half) * C * R * S * (N_gpu_end[i] - N_gpu_start[i]) * OH * OW));
+    CHECK_CUDA(cudaMalloc(&BUF2_gpu[i], sizeof(float) * K * (N_gpu_end[i] - N_gpu_start[i]) * OH * OW));
+  }
+
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
