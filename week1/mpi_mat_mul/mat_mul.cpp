@@ -245,11 +245,11 @@ void mat_mul(float *A, float *B, float *C, int M, int N, int K,
   M = sendcounts[_mpi_rank] / K;
   // std::cout << "\nmpi rank " << _mpi_rank << " " << M << " " << sendcounts[_mpi_rank] << " " << displ[_mpi_rank] << std::endl;
   MPI_Request request_result;
-  // MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
+  MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
   // double start = MPI_Wtime();
   mat_mul_pthread(A, B, C, M, N, K, _num_threads, _mpi_rank);
   // printf("%d done\n",mpi_rank);
   MPI_Igatherv(C, M * N, MPI_FLOAT, C, recvcounts, displ_C, MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
   // MPI_Gather(C, M * N, MPI_FLOAT, C, M*N, MPI_FLOAT, 0, MPI_COMM_WORLD);
-  // MPI_Wait(&request_result, MPI_STATUS_IGNORE);
+  MPI_Wait(&request_result, MPI_STATUS_IGNORE);
 }
