@@ -36,16 +36,30 @@ float *alloc_tensor(int N, int C, int H, int W)
   return m;
 }
 
+float *alloc_tensor32(int N, int C, int H, int W)
+{
+  // float *m = (float *)aligned_alloc(32, N * C * H * W * sizeof(float));
+    float *m;
+  CHECK_CUDA(cudaMallocHost(&m, sizeof(float) * N * C * H * W));
+  return m;
+}
+
 void rand_tensor(float *m, int N, int C, int H, int W)
 {
   int L = N * C * H * W;
   for (int j = 0; j < L; j++)
   {
-    m[j] = (float)rand() / RAND_MAX - 0.5;
+    m[j] = (float)((float)rand() / RAND_MAX - 0.5);
   }
 }
 
 void zero_tensor(float *m, int N, int C, int H, int W)
+{
+  int L = N * C * H * W;
+  memset((void *)m, 0, sizeof(float) * L);
+}
+
+void zero_tensor32(float *m, int N, int C, int H, int W)
 {
   int L = N * C * H * W;
   memset((void *)m, 0, sizeof(float) * L);
@@ -62,7 +76,26 @@ void print_tensor(float *m, int N, int C, int H, int W)
       {
         for (int w = 0; w < W; ++w)
         {
-          printf("%+.3f ", m[((n * C + c) * H + h) * W + w]);
+          printf("%+.3f ", (float)(m[((n * C + c) * H + h) * W + w]));
+        }
+        printf("\n");
+      }
+    }
+  }
+}
+
+void print_tensor32(float *m, int N, int C, int H, int W)
+{
+  for (int n = 0; n < N; ++n)
+  {
+    for (int c = 0; c < C; ++c)
+    {
+      printf("Batch %d, Channel %d\n", n, c);
+      for (int h = 0; h < H; ++h)
+      {
+        for (int w = 0; w < W; ++w)
+        {
+          printf("%+.3f ", (float)(m[((n * C + c) * H + h) * W + w]));
         }
         printf("\n");
       }
@@ -79,8 +112,8 @@ void check_convolution(float *I, float *F, float *O, int N, int C, int H, int W,
   const int OC = K;
   const int OH = 1 + (H + 2 * pad_h - (((R - 1) * dilation_h) + 1)) / stride_h;
   const int OW = 1 + (W + 2 * pad_w - (((S - 1) * dilation_w) + 1)) / stride_w;
-  O_ans = alloc_tensor(ON, OC, OH, OW);
-  zero_tensor(O_ans, ON, OC, OH, OW);
+  O_ans = alloc_tensor32(ON, OC, OH, OW);
+  zero_tensor32(O_ans, ON, OC, OH, OW);
 
 #pragma omp parallel for
   for (int on = 0; on < ON; ++on)
@@ -91,7 +124,7 @@ void check_convolution(float *I, float *F, float *O, int N, int C, int H, int W,
       {
         for (int ow = 0; ow < OW; ++ow)
         {
-          float sum = 0;
+          float sum = 0.0f;
           for (int c = 0; c < C; ++c)
           {
             for (int r = 0; r < R; ++r)
@@ -104,8 +137,8 @@ void check_convolution(float *I, float *F, float *O, int N, int C, int H, int W,
                 const int k = oc;
                 if (h < 0 || h >= H || w < 0 || w >= W)
                   continue;
-                sum += I[((n * C + c) * H + h) * W + w] *
-                       F[((k * C + c) * R + r) * S + s];
+                sum = sum + ((float)I[((n * C + c) * H + h) * W + w] *
+                             (float)F[((k * C + c) * R + r) * S + s]);
               }
             }
           }
@@ -117,7 +150,7 @@ void check_convolution(float *I, float *F, float *O, int N, int C, int H, int W,
 
   bool is_valid = true;
   int cnt = 0, thr = 10;
-  float eps = 1e-3;
+  float eps = 1e-3f;
   for (int on = 0; on < ON; ++on)
   {
     for (int oc = 0; oc < OC; ++oc)
@@ -128,14 +161,17 @@ void check_convolution(float *I, float *F, float *O, int N, int C, int H, int W,
         {
           float o = O[((on * OC + oc) * OH + oh) * OW + ow];
           float o_ans = O_ans[((on * OC + oc) * OH + oh) * OW + ow];
-          if (fabsf(o - o_ans) > eps &&
-              (o_ans == 0 || fabsf((o - o_ans) / o_ans) > eps))
+
+          // printf("original : %f, calc : %f\n",o_ans,o);
+
+          if (fabsf(fabsf(o) - fabsf(o_ans)) > eps &&
+              (o_ans == 0 || fabsf((fabsf(o) - fabsf(o_ans)) / o_ans) > eps))
           {
             ++cnt;
             if (cnt <= thr)
               printf(
                   "O[%d][%d][%d][%d] : correct_value = %f, your_value = %f\n",
-                  on, oc, oh, ow, o_ans, o);
+                  on, oc, oh, ow, (float)o_ans, (float)o);
             if (cnt == thr + 1)
               printf("Too many error, only first %d values are printed.\n",
                      thr);

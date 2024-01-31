@@ -1,11 +1,11 @@
 TARGET=main
 OBJECTS=main.o util.o convolution.o
 
-CPPFLAGS=-std=c++14 -O3 -Wall -march=znver2 -mavx2 -mfma -fopenmp -mno-avx512f -I/usr/local/cuda/include
-CUDA_CFLAGS:=$(foreach option, $(CPPFLAGS),-Xcompiler=$(option)  -arch=sm_70) --fmad=true
+CPPFLAGS=-std=c++14 -O3 -Wall -march=native -mavx2 -mfma -fopenmp -mno-avx512f -I/usr/local/cuda/include -funroll-loops
+CUDA_CFLAGS:=$(foreach option, $(CPPFLAGS),-Xcompiler=$(option) -arch=sm_70)
 
 LDFLAGS=-L/usr/local/cuda/lib64
-LDLIBS=-lstdc++ -lcudart -lm -lcudnn -lcublas
+LDLIBS=-lstdc++ -lcudart -lm -lcudnn
 
 CXX=g++
 CUX=/usr/local/cuda/bin/nvcc
