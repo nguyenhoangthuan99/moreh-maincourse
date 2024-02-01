@@ -13,6 +13,7 @@ static int ngpu;
 static half *I_gpu[1024], *F_gpu[1024], *BUF1_gpu[1024];
 static float *BUF2_gpu[1024], *O_gpu[1024];
 static int N_gpu_start[1024], N_gpu_end[1024];
+static MPI_Datatype mpi_half;
 #define CHECK_CUDA(call)                                                 \
   do                                                                     \
   {                                                                      \
@@ -220,10 +221,10 @@ void convolution_thread(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2
   }
 
   int Nbegin[num_stream_blocks], Nend[num_stream_blocks];
-  for (size_t i = 0; i < num_stream_blocks; i++)
+  for (int i = 0; i < num_stream_blocks; i++)
   {
-    Nbegin[i] = N / num_stream_blocks * i;
-    Nend[i] = N / num_stream_blocks * (i + 1);
+    Nbegin[i] =  N / num_stream_blocks * i + std::min(i, N % num_stream_blocks);
+    Nend[i] = N / num_stream_blocks * (i + 1) + std::min(i + 1, N % num_stream_blocks);
     if (i == num_stream_blocks - 1)
       Nend[i] = N;
   }
@@ -318,30 +319,32 @@ void convolution(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2, int N
   int displ_O[mpi_world_size];
 
   int Nbegin[mpi_world_size], Nend[mpi_world_size];
-  for (size_t i = 0; i < mpi_world_size; i++)
+  for (int i = 0; i < mpi_world_size; i++)
   {
-    Nbegin[i] = N / mpi_world_size * i;
-    Nend[i] = N / mpi_world_size * (i + 1);
+    Nbegin[i] =  N / mpi_world_size * i + std::min(i, N % mpi_world_size);
+    Nend[i] = N / mpi_world_size * (i + 1) + std::min(i + 1, N % mpi_world_size);
     if (i == mpi_world_size - 1)
       Nend[i] = N;
 
-    sendcounts[i] = (Nend[i] - Nbegin[i]) * C * H * W * sizeof(half);
+    sendcounts[i] = (Nend[i] - Nbegin[i]) * C * H * W ;
     recvcounts[i] = (Nend[i] - Nbegin[i]) * K * OH * OW ;
-    displ[i] = Nbegin[i] * C * H * W * sizeof(half);
+    displ[i] = Nbegin[i] * C * H * W ;
     displ_O[i] = Nbegin[i] * K * OH * OW ;
   }
-  MPI_Ibcast((void *)_F, K * C * R * S * sizeof(half), MPI_BYTE, 0, MPI_COMM_WORLD, request);
+  MPI_Ibcast(_F, K * C * R * S , mpi_half, 0, MPI_COMM_WORLD, request);
 
-  MPI_Iscatterv((void *)_I, sendcounts, displ, MPI_BYTE, (void *)_I, N * C * H * W * sizeof(half), MPI_BYTE, 0, MPI_COMM_WORLD, request + 1);
-  N = sendcounts[mpi_rank] / (C * H * W)/ sizeof(half);
+  MPI_Iscatterv(_I, sendcounts, displ, mpi_half, _I, sendcounts[mpi_rank], mpi_half, 0, MPI_COMM_WORLD, request + 1);
+  // MPI_Scatter(_I, sendcounts, displ, mpi_half, (void *)_I, N * C * H * W , MPI_BYTE, 0, MPI_COMM_WORLD);
+  N = sendcounts[mpi_rank] / (C * H * W);
 
   MPI_Request request_result;
   MPI_Waitall(2, request, status);
+  // MPI_Wait( request, status);
   
   convolution_node(_I, _F, _O, _BUF1, _BUF2, N,
                    C, H, W, K, R, S, pad_h, pad_w,
                    stride_h, stride_w, dilation_h, dilation_w);
-  MPI_Igatherv(_O, N * K * OH * OW , MPI_FLOAT, _O, recvcounts, displ_O, MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
+  MPI_Igatherv(_O, recvcounts[mpi_rank], MPI_FLOAT, _O, recvcounts, displ_O, MPI_FLOAT, 0, MPI_COMM_WORLD, &request_result);
   MPI_Wait(&request_result, MPI_STATUS_IGNORE);
 }
 void convolution_initialize(int N, int C, int H, int W, int K, int R, int S,
@@ -355,10 +358,10 @@ void convolution_initialize(int N, int C, int H, int W, int K, int R, int S,
   cudaGetDeviceCount(&ngpu);
   // ngpu = 1;
   printf("\nNum GPUs: %d\n", ngpu);
-  for (size_t i = 0; i < ngpu; i++)
+  for (int i = 0; i < ngpu; i++)
   {
-    N_gpu_start[i] = N / ngpu * i;
-    N_gpu_end[i] = N / ngpu * (i + 1);
+    N_gpu_start[i] = N / ngpu * i + std::min(i, N % ngpu);
+    N_gpu_end[i] = N / ngpu * (i + 1) + std::min(i + 1, N % ngpu);
     if (i == ngpu - 1)
       N_gpu_end[i] = N;
   }
@@ -374,6 +377,8 @@ void convolution_initialize(int N, int C, int H, int W, int K, int R, int S,
   }
 
   CHECK_CUDA(cudaDeviceSynchronize());
+    MPI_Type_contiguous(sizeof(half),MPI_BYTE,&mpi_half);
+  MPI_Type_commit(&mpi_half);
 }
 
 void convolution_cleanup(half *_I, half *_F, float *_O, int N, int C, int H,

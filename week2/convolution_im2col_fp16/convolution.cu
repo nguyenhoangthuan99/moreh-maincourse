@@ -72,30 +72,39 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
   __shared__ float A1[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float A2[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float A3[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float A4[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float A5[BLOCK_SIZE][BLOCK_SIZE];
 
   __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B1[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B2[BLOCK_SIZE][BLOCK_SIZE];
   __shared__ float B3[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float B4[BLOCK_SIZE][BLOCK_SIZE];
+  __shared__ float B5[BLOCK_SIZE][BLOCK_SIZE];
 
   // float sum[8] = {0.0f};//, sum1 = 0., sum2 = 0., sum3 = 0., sum4 = 0, sum5 = 0, sum6 = 0, sum7 = 0;
-  float sum[4][4] = {0};
-  float zero_half = 0.;
+  float sum[6][6] = {0};
+  float zero_float = 0.;
   // float4 sum2 = make_float4(0, 0, 0, 0);
   int boundk = (K + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  int aid = 4 * idy * K + threadIdx.x;
-  int bid = threadIdx.y * N + idx * 4;
+  int aid = 6 * idy * K + threadIdx.x;
+  int bid = threadIdx.y * N + idx * 6;
   // printf("%d %d - %d %d\n", aid, bid, idx, idy);
   for (k = 0; k < boundk; k++)
   {
-    As[threadIdx.y][threadIdx.x] = (idy * 4 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid] : zero_half;
-    A1[threadIdx.y][threadIdx.x] = (idy * 4 + 1 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + K] : zero_half;
-    A2[threadIdx.y][threadIdx.x] = (idy * 4 + 2 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + 2 * K] : zero_half;
-    A3[threadIdx.y][threadIdx.x] = (idy * 4 + 3 < M) && k * BLOCK_SIZE + threadIdx.x < K ? (float)_A[aid + 3 * K] : zero_half;
-    Bs[threadIdx.y][threadIdx.x] = (idx * 4 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid] : zero_half;
-    B1[threadIdx.y][threadIdx.x] = (idx * 4 + 1 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 1] : zero_half;
-    B2[threadIdx.y][threadIdx.x] = (idx * 4 + 2 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 2] : zero_half;
-    B3[threadIdx.y][threadIdx.x] = (idx * 4 + 3 < N) && k * BLOCK_SIZE + threadIdx.y < K ? (float)_B[bid + 3] : zero_half;
+    As[threadIdx.y][threadIdx.x] = (idy * 6 < M) && k * BLOCK_SIZE + threadIdx.x < K ? __half2float(_A[aid]) : zero_float;
+    A1[threadIdx.y][threadIdx.x] = (idy * 6 + 1 < M) && k * BLOCK_SIZE + threadIdx.x < K ? __half2float(_A[aid + K]) : zero_float;
+    A2[threadIdx.y][threadIdx.x] = (idy * 6 + 2 < M) && k * BLOCK_SIZE + threadIdx.x < K ? __half2float(_A[aid + 2 * K]) : zero_float;
+    A3[threadIdx.y][threadIdx.x] = (idy * 6 + 3 < M) && k * BLOCK_SIZE + threadIdx.x < K ? __half2float(_A[aid + 3 * K]) : zero_float;
+    A4[threadIdx.y][threadIdx.x] = (idy * 6 + 4 < M) && k * BLOCK_SIZE + threadIdx.x < K ? __half2float(_A[aid + 4 * K]) : zero_float;
+    A5[threadIdx.y][threadIdx.x] = (idy * 6 + 5 < M) && k * BLOCK_SIZE + threadIdx.x < K ? __half2float(_A[aid + 5 * K]) : zero_float;
+
+    Bs[threadIdx.y][threadIdx.x] = (idx * 6 < N) && k * BLOCK_SIZE + threadIdx.y < K ? __half2float(_B[bid]) : zero_float;
+    B1[threadIdx.y][threadIdx.x] = (idx * 6 + 1 < N) && k * BLOCK_SIZE + threadIdx.y < K ? __half2float(_B[bid + 1]) : zero_float;
+    B2[threadIdx.y][threadIdx.x] = (idx * 6 + 2 < N) && k * BLOCK_SIZE + threadIdx.y < K ? __half2float(_B[bid + 2]) : zero_float;
+    B3[threadIdx.y][threadIdx.x] = (idx * 6 + 3 < N) && k * BLOCK_SIZE + threadIdx.y < K ? __half2float(_B[bid + 3]) : zero_float;
+    B4[threadIdx.y][threadIdx.x] = (idx * 6 + 4 < N) && k * BLOCK_SIZE + threadIdx.y < K ? __half2float(_B[bid + 4]) : zero_float;
+    B5[threadIdx.y][threadIdx.x] = (idx * 6 + 5 < N) && k * BLOCK_SIZE + threadIdx.y < K ? __half2float(_B[bid + 5]) : zero_float;
     __syncthreads();
 
     // #pragma unroll 32
@@ -105,30 +114,56 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
       float a1 = A1[threadIdx.y][ex];
       float a2 = A2[threadIdx.y][ex];
       float a3 = A3[threadIdx.y][ex];
+      float a4 = A4[threadIdx.y][ex];
+      float a5 = A5[threadIdx.y][ex];
       float b0 = Bs[ex][threadIdx.x];
       float b1 = B1[ex][threadIdx.x];
       float b2 = B2[ex][threadIdx.x];
       float b3 = B3[ex][threadIdx.x];
+      float b4 = B4[ex][threadIdx.x];
+      float b5 = B5[ex][threadIdx.x];
 
       sum[0][0] += a0 * b0;
       sum[0][1] += a0 * b1;
       sum[0][2] += a0 * b2;
       sum[0][3] += a0 * b3;
+      sum[0][4] += a0 * b4;
+      sum[0][5] += a0 * b5;
 
       sum[1][0] += a1 * b0;
       sum[1][1] += a1 * b1;
       sum[1][2] += a1 * b2;
       sum[1][3] += a1 * b3;
+      sum[1][4] += a1 * b4;
+      sum[1][5] += a1 * b5;
 
       sum[2][0] += a2 * b0;
       sum[2][1] += a2 * b1;
       sum[2][2] += a2 * b2;
       sum[2][3] += a2 * b3;
+      sum[2][4] += a2 * b4;
+      sum[2][5] += a2 * b5;
 
       sum[3][0] += a3 * b0;
       sum[3][1] += a3 * b1;
       sum[3][2] += a3 * b2;
       sum[3][3] += a3 * b3;
+      sum[3][4] += a3 * b4;
+      sum[3][5] += a3 * b5;
+
+      sum[4][0] += a4 * b0;
+      sum[4][1] += a4 * b1;
+      sum[4][2] += a4 * b2;
+      sum[4][3] += a4 * b3;
+      sum[4][4] += a4 * b4;
+      sum[4][5] += a4 * b5;
+
+      sum[5][0] += a5 * b0;
+      sum[5][1] += a5 * b1;
+      sum[5][2] += a5 * b2;
+      sum[5][3] += a5 * b3;
+      sum[5][4] += a5 * b4;
+      sum[5][5] += a5 * b5;
     }
     __syncthreads();
     aid += BLOCK_SIZE;
@@ -137,15 +172,15 @@ __global__ void matmul_gpu(half *_A, half *_B, float *_C, int M, int N, int K, i
   // float sum[4] = {sum0, sum1, sum2, sum3};
 
   int temp_K = M, temp_OHOW = N / temp_N;
-  float left = min(4, N - idx * 4);
-  float left_j = min(4, M - idy * 4);
+  float left = min(6, N - idx * 6);
+  float left_j = min(6, M - idy * 6);
 #pragma unroll
   for (int j = 0; j < left_j; j++)
   {
 #pragma unroll
     for (int i = 0; i < left; i++)
     {
-      int c_index = idx * 4 + i + (idy * 4 + j) * N;
+      int c_index = idx * 6 + i + (idy * 6 + j) * N;
       int ohow = c_index % temp_OHOW;
       int n = c_index / temp_OHOW % temp_N;
       k = c_index / temp_OHOW / temp_N;
@@ -213,7 +248,7 @@ void convolution_thread(half *_I, half *_F, float *_O, half *_BUF1, float *_BUF2
     cudaEventRecord(events_im2col_cals[i], calc_im2col_stream);
     // CHECK_CUDA(cudaDeviceSynchronize());
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE, 1);
-    dim3 gridDim((((Nend[i] - Nbegin[i]) * OH * OW + 3) / 4 + blockDim.x - 1) / blockDim.x, ((K + 3) / 4 + blockDim.y - 1) / blockDim.y, 1);
+    dim3 gridDim((((Nend[i] - Nbegin[i]) * OH * OW + 5) / 6 + blockDim.x - 1) / blockDim.x, ((K + 5) / 6 + blockDim.y - 1) / blockDim.y, 1);
     cudaStreamWaitEvent(calc_matmul_stream, events_im2col_cals[i]);
     matmul_gpu<<<gridDim, blockDim, 0, calc_matmul_stream>>>(F_gpu[gpu_id], &BUF1_gpu[gpu_id][Nbegin[i] * C * R * S * OH * OW],
                                                              &BUF2_gpu[gpu_id][Nbegin[i] * K * OH * OW],

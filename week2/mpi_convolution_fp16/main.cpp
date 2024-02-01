@@ -121,19 +121,21 @@ static void parse_opt(int argc, char **argv)
       break;
     }
   }
-
-  printf(
-      "Problem size: N = %d, C = %d, H = %d, W = %d, K = %d, R = %d, S = "
-      "%d\n",
-      N, C, H, W, K, R, S);
-  printf("              pad_h = %d, pad_w = %d, stride_h = %d, stride_w = %d\n",
-         pad_h, pad_w, stride_h, stride_w);
-  printf("              dilation_h = %d, dilation_w = %d\n", dilation_h,
-         dilation_w);
-  printf("Number of iterations: %d\n", num_iterations);
-  printf("Print tensor: %s\n", print ? "on" : "off");
-  printf("Validation: %s\n", validation ? "on" : "off");
-  printf("\n");
+  if (mpi_rank == 0)
+  {
+    printf(
+        "Problem size: N = %d, C = %d, H = %d, W = %d, K = %d, R = %d, S = "
+        "%d\n",
+        N, C, H, W, K, R, S);
+    printf("              pad_h = %d, pad_w = %d, stride_h = %d, stride_w = %d\n",
+           pad_h, pad_w, stride_h, stride_w);
+    printf("              dilation_h = %d, dilation_w = %d\n", dilation_h,
+           dilation_w);
+    printf("Number of iterations: %d\n", num_iterations);
+    printf("Print tensor: %s\n", print ? "on" : "off");
+    printf("Validation: %s\n", validation ? "on" : "off");
+    printf("\n");
+  }
 }
 
 int main(int argc, char **argv)
@@ -169,8 +171,8 @@ int main(int argc, char **argv)
   int N_mpi_start[mpi_world_size], N_mpi_end[mpi_world_size];
   for (int i = 0; i < mpi_world_size; i++)
   {
-    N_mpi_start[i] = N / mpi_world_size * i;
-    N_mpi_end[i] = N / mpi_world_size * (i + 1);
+    N_mpi_start[i] = N / mpi_world_size * i + std::min(i, N % mpi_world_size);
+    N_mpi_end[i] = N / mpi_world_size * (i + 1) + std::min(i + 1, N % mpi_world_size);
     if (i == mpi_world_size - 1)
       N_mpi_end[i] = N;
   }
@@ -178,7 +180,7 @@ int main(int argc, char **argv)
   {
     I = alloc_tensor(N, C, H, W);
     F = alloc_tensor(K, C, R, S);
-    printf("done!\n");
+    // printf("done!\n");
     // printf("%d %d %d %d\n", N_mpi_end[mpi_rank] - N_mpi_start[mpi_rank], OC, OH, OW);
     O = alloc_tensor32(ON, OC, OH, OW);
     // BUF1 = alloc_tensor(C, R, S, N * OH * OW);
@@ -191,7 +193,7 @@ int main(int argc, char **argv)
   {
     I = alloc_tensor(N_mpi_end[mpi_rank] - N_mpi_start[mpi_rank], C, H, W);
     F = alloc_tensor(K, C, R, S);
-    printf("done!\n");
+    // printf("done!\n");
     // printf("%d %d %d %d\n", N_mpi_end[mpi_rank] - N_mpi_start[mpi_rank], OC, OH, OW);
     O = alloc_tensor32(N_mpi_end[mpi_rank] - N_mpi_start[mpi_rank], OC, OH, OW);
 
@@ -208,11 +210,11 @@ int main(int argc, char **argv)
   MPI_Barrier(MPI_COMM_WORLD);
   for (int i = 0; i < num_iterations; ++i)
   {
-    printf("Calculating...(iter=%d) ", i);
-    fflush(stdout);
 
     if (mpi_rank == 0)
     {
+      printf("Calculating...(iter=%d) ", i);
+      fflush(stdout);
       zero_tensor32(O, ON, OC, OH, OW);
     }
     else
@@ -224,10 +226,10 @@ int main(int argc, char **argv)
 
     double start_time = get_time();
     convolution(I, F, O, BUF1, BUF2, N, C, H, W, K, R, S, pad_h, pad_w,
-                stride_h, stride_w, dilation_h, dilation_w,mpi_rank,mpi_world_size);
+                stride_h, stride_w, dilation_h, dilation_w, mpi_rank, mpi_world_size);
     double elapsed_time = get_time() - start_time;
     MPI_Barrier(MPI_COMM_WORLD);
-    if(mpi_rank == 0 && i > 0)
+    if (mpi_rank == 0)
     {
       printf("%f sec\n", elapsed_time);
       elapsed_time_sum += elapsed_time;
@@ -257,7 +259,7 @@ int main(int argc, char **argv)
   /* Print performance results */
   if (mpi_rank == 0)
   {
-    double elapsed_time_avg = elapsed_time_sum / (num_iterations - 1);
+    double elapsed_time_avg = elapsed_time_sum / (num_iterations);
     printf("Avg. time: %f sec\n", elapsed_time_avg);
     printf("Avg. throughput: %f GFLOPS\n",
            2.0 * ON * OC * OH * OW * C * R * S / elapsed_time_avg / 1e9);

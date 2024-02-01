@@ -104,7 +104,21 @@ int main(int argc, char **argv)
          mpi_rank, mpi_world_size);
 
   parse_opt(argc, argv);
-
+  int sendcounts[mpi_world_size]; //= (int *)malloc(mpi_world_size * sizeof(int));
+  int recvcounts[mpi_world_size];
+  int displ[mpi_world_size]; // = (int *)malloc(mpi_world_size * sizeof(int));
+  int displ_C[mpi_world_size];
+  for (int i = 0; i < mpi_world_size; i++)
+  {
+    int is = M / mpi_world_size * i + std::min(i, M % mpi_world_size);           // M / _mpi_world_size * i;
+    int ie = M / mpi_world_size * (i + 1) + std::min(i + 1, M % mpi_world_size); // i + 1 == _mpi_world_size ? M : M / _mpi_world_size * (i + 1); // M / _mpi_world_size * (i + 1) + std::min(i + 1, M % _mpi_world_size);//
+    sendcounts[i] = (ie - is) * K;
+    recvcounts[i] = (ie - is) * N;
+    displ[i] = is * K;
+    displ_C[i] = is * N;
+    // std::cout << "\n"
+    //           << sendcounts[i] << " " << displ[i] << std::endl;
+  }
   float *A, *B, *C;
   if (mpi_rank == 0)
   {
@@ -118,10 +132,10 @@ int main(int argc, char **argv)
   }
   else
   {
-    A = (float *)numa_alloc_interleaved(M  / mpi_world_size *K * sizeof(float));
+    A = (float *)numa_alloc_interleaved(sendcounts[mpi_rank]* sizeof(float));
     B = (float *)numa_alloc_interleaved(K * N * sizeof(float));
-    C = (float *)numa_alloc_interleaved(M / mpi_world_size * N  * sizeof(float));
-    zero_mat(C, M/mpi_world_size, N);
+    C = (float *)numa_alloc_interleaved(recvcounts[mpi_rank] * sizeof(float));
+    zero_mat(C, sendcounts[mpi_rank]/K, N);
   }
 
   MPI_Barrier(MPI_COMM_WORLD);
@@ -147,7 +161,7 @@ int main(int argc, char **argv)
     MPI_Barrier(MPI_COMM_WORLD);
     double elapsed_time = timer_stop(0);
 
-    if (mpi_rank == 0 && i > 0)
+    if (mpi_rank == 0 )
     {
       printf("%f sec\n", elapsed_time);
       elapsed_time_sum += elapsed_time;
@@ -171,7 +185,7 @@ int main(int argc, char **argv)
       check_mat_mul(A, B, C, M, N, K);
     }
 
-    double elapsed_time_avg = elapsed_time_sum / (num_iterations - 1);
+    double elapsed_time_avg = elapsed_time_sum / (num_iterations );
     printf("[rank %d] Avg. time: %f sec\n", mpi_rank, elapsed_time_avg);
     printf("[rank %d] Avg. throughput: %f GFLOPS\n", mpi_rank,
            2.0 * M * N * K / elapsed_time_avg / 1e9);
