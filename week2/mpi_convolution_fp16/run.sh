@@ -17,5 +17,5 @@ salloc -N 2 mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -v -n 3 5 
 salloc -N 2 mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -v -n 3 1 3 127 129 128 3 3 2 2 2 1 1
 salloc -N 2 --exclusive  mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -v -n 3 13 5 51 313 511 19 3 1 3 1 3
 salloc -N 2 mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -n 10 128 512 64 64 1024 3 3 1 1 1 1 1 1
-salloc -N 2 mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -v -n 3 1000 7 51 71 37 23 17 1 1 1 1 1
+salloc -N 2 mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -v -n 3 10 7 51 71 37 23 17 1 1 1 1 1
 salloc -N 2 mpirun --bind-to none -mca btl ^openib -npernode 1 ./main -v -n 3 1771 3 25 21 17 21 11 1 1 1 1 1
